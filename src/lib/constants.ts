@@ -100,7 +100,7 @@ export const APP_SUBTITLE: string = 'Stake, compete, win';
  * Detailed tagline for the mini app.
  * Used for marketing and promotional purposes.
  */
-export const APP_TAGLINE: string = 'Put your money where your mouth is';
+export const APP_TAGLINE: string = 'Stake, compete, and win';
 
 /**
  * Screenshot URLs for the mini app.
