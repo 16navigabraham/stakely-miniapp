@@ -72,8 +72,16 @@ export const APP_SPLASH_BACKGROUND_COLOR: string = '#f7f7f7';
  * Used to associate the mini app with a Farcaster account.
  * If not provided, the mini app will be unsigned and have limited capabilities.
  */
-export const APP_ACCOUNT_ASSOCIATION: AccountAssociation | undefined =
-  undefined;
+export const APP_ACCOUNT_ASSOCIATION: AccountAssociation | undefined = 
+  process.env.FARCASTER_ACCOUNT_ASSOCIATION_HEADER &&
+  process.env.FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD &&
+  process.env.FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE
+    ? {
+        header: process.env.FARCASTER_ACCOUNT_ASSOCIATION_HEADER,
+        payload: process.env.FARCASTER_ACCOUNT_ASSOCIATION_PAYLOAD,
+        signature: process.env.FARCASTER_ACCOUNT_ASSOCIATION_SIGNATURE,
+      }
+    : undefined;
 
 // --- UI Configuration ---
 /**
@@ -81,6 +89,46 @@ export const APP_ACCOUNT_ASSOCIATION: AccountAssociation | undefined =
  * Used for the primary call-to-action in the mini app.
  */
 export const APP_BUTTON_TEXT: string = 'Challenge yourself';
+
+/**
+ * Subtitle for the mini app.
+ * A brief tagline that appears below the main title.
+ */
+export const APP_SUBTITLE: string = 'Stake, compete, win';
+
+/**
+ * Detailed tagline for the mini app.
+ * Used for marketing and promotional purposes.
+ */
+export const APP_TAGLINE: string = 'Put your money where your mouth is';
+
+/**
+ * Screenshot URLs for the mini app.
+ * Used in app store listings and promotional materials.
+ */
+export const APP_SCREENSHOT_URLS: string[] = [
+  `${APP_URL}/screenshot1.png`,
+  `${APP_URL}/screenshot2.png`,
+  `${APP_URL}/screenshot3.png`,
+];
+
+/**
+ * Hero image URL for the mini app.
+ * Used for promotional banners and featured listings.
+ */
+export const APP_HERO_IMAGE_URL: string = `${APP_URL}/hero.png`;
+
+/**
+ * Open Graph title for social media sharing.
+ * Used when the mini app is shared on social platforms.
+ */
+export const APP_OG_TITLE: string = APP_NAME;
+
+/**
+ * Open Graph description for social media sharing.
+ * Used when the mini app is shared on social platforms.
+ */
+export const APP_OG_DESCRIPTION: string = APP_DESCRIPTION;
 
 // --- Integration Configuration ---
 /**
