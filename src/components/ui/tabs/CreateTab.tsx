@@ -136,13 +136,6 @@ export function CreateTab() {
     }, 2000);
   };
 
-  // Format date for display
-  const formatDateDisplay = (dateString: string) => {
-    if (!dateString) return 'Select Date';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
-
   return (
     <div className="h-screen bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] overflow-hidden flex flex-col pb-20">
       {/* Progress Bar */}
@@ -332,7 +325,7 @@ export function CreateTab() {
               </span>
             </h2>
 
-            {/* Start Date - With Calendar Icon */}
+            {/* Start Date - FIXED WIDTH */}
             <div>
               <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
                 📅 Start Date
@@ -343,7 +336,7 @@ export function CreateTab() {
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
                   min={today}
-                  className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-base transition-all duration-300 outline-none cursor-pointer"
+                  className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-sm transition-all duration-300 outline-none cursor-pointer"
                   style={{
                     colorScheme: 'dark',
                   }}
@@ -354,6 +347,16 @@ export function CreateTab() {
                   </svg>
                 </div>
               </div>
+              {startDate && (
+                <p className="text-gray-400 text-xs mt-1 px-1">
+                  {new Date(startDate + 'T00:00:00').toLocaleDateString('en-US', { 
+                    weekday: 'long',
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                  })}
+                </p>
+              )}
             </div>
 
             {/* Start Time Picker */}
@@ -364,7 +367,7 @@ export function CreateTab() {
               onChange={setStartTime}
             />
 
-            {/* End Date - With Calendar Icon */}
+            {/* End Date - FIXED WIDTH */}
             <div>
               <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
                 📅 End Date
@@ -375,7 +378,7 @@ export function CreateTab() {
                   value={endDate}
                   onChange={(e) => setEndDate(e.target.value)}
                   min={startDate || today}
-                  className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-base transition-all duration-300 outline-none cursor-pointer"
+                  className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-sm transition-all duration-300 outline-none cursor-pointer"
                   style={{
                     colorScheme: 'dark',
                   }}
@@ -386,6 +389,16 @@ export function CreateTab() {
                   </svg>
                 </div>
               </div>
+              {endDate && (
+                <p className="text-gray-400 text-xs mt-1 px-1">
+                  {new Date(endDate + 'T00:00:00').toLocaleDateString('en-US', { 
+                    weekday: 'long',
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                  })}
+                </p>
+              )}
             </div>
 
             {/* End Time Picker */}
@@ -492,4 +505,4 @@ export function CreateTab() {
       </div>
     </div>
   );
-}  
+}
