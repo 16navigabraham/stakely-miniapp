@@ -40,7 +40,7 @@ export const APP_PRIMARY_CATEGORY: string = 'games';
  * Tags associated with the mini app.
  * Used for search and discovery in app stores.
  */
-export const APP_TAGS: string[] = ['game', 'finance'];
+export const APP_TAGS: string[] = ['game', 'finance','utility'];
 
 // --- Asset URLs ---
 /**
