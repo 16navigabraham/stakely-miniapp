@@ -4,12 +4,18 @@ import { Manifest } from '@farcaster/miniapp-core/src/manifest';
 import {
   APP_BUTTON_TEXT,
   APP_DESCRIPTION,
+  APP_HERO_IMAGE_URL,
   APP_ICON_URL,
   APP_NAME,
+  APP_OG_DESCRIPTION,
   APP_OG_IMAGE_URL,
+  APP_OG_TITLE,
   APP_PRIMARY_CATEGORY,
+  APP_SCREENSHOT_URLS,
   APP_SPLASH_BACKGROUND_COLOR,
   APP_SPLASH_URL,
+  APP_SUBTITLE,
+  APP_TAGLINE,
   APP_TAGS,
   APP_URL,
   APP_WEBHOOK_URL,
@@ -44,7 +50,7 @@ export function getMiniAppEmbedMetadata(ogImageUrl?: string) {
   };
 }
 
-export async function getFarcasterDomainManifest(): Promise<Manifest> {
+export async function getFarcasterDomainManifest(): Promise<any> {
   return {
     accountAssociation: APP_ACCOUNT_ASSOCIATION!,
     miniapp: {
@@ -57,6 +63,16 @@ export async function getFarcasterDomainManifest(): Promise<Manifest> {
       splashImageUrl: APP_SPLASH_URL,
       splashBackgroundColor: APP_SPLASH_BACKGROUND_COLOR,
       webhookUrl: APP_WEBHOOK_URL,
+      subtitle: APP_SUBTITLE,
+      description: APP_DESCRIPTION,
+      screenshotUrls: APP_SCREENSHOT_URLS,
+      primaryCategory: APP_PRIMARY_CATEGORY,
+      tags: APP_TAGS,
+      heroImageUrl: APP_HERO_IMAGE_URL,
+      tagline: APP_TAGLINE,
+      ogTitle: APP_OG_TITLE,
+      ogDescription: APP_OG_DESCRIPTION,
+      ogImageUrl: APP_OG_IMAGE_URL,
     },
   };
 }
