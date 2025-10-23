@@ -18,29 +18,6 @@ export function Header({ neynarUser }: HeaderProps) {
 
   return (
     <div className="relative">
-      <div 
-        className="mt-4 mb-4 mx-4 px-2 py-2 bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-between border-[3px] border-double border-primary"
-      >
-        <div className="text-lg font-light">
-          Welcome to {APP_NAME}!
-        </div>
-        {context?.user && (
-          <div 
-            className="cursor-pointer"
-            onClick={() => {
-              setIsUserDropdownOpen(!isUserDropdownOpen);
-            }}
-          >
-            {context.user.pfpUrl && (
-              <img 
-                src={context.user.pfpUrl} 
-                alt="Profile" 
-                className="w-10 h-10 rounded-full border-2 border-primary"
-              />
-            )}
-          </div>
-        )}
-      </div>
       {context?.user && (
         <>      
           {isUserDropdownOpen && (

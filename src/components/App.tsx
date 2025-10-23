@@ -1,56 +1,21 @@
+// app/App.tsx
 "use client";
-
-import { useEffect } from "react";
+import { useState } from "react";
 import { useMiniApp } from "@neynar/react";
 import { Header } from "~/components/ui/Header";
 import { Footer } from "~/components/ui/Footer";
-import { HomeTab, ActionsTab, ContextTab, WalletTab } from "~/components/ui/tabs";
+import { MarketTab, CreateTab, LeaderboardTab, RewardsTab } from "~/components/ui/tabs";
 import { USE_WALLET } from "~/lib/constants";
 import { useNeynarUser } from "../hooks/useNeynarUser";
-
-// --- Types ---
-export enum Tab {
-  Home = "home",
-  Actions = "actions",
-  Context = "context",
-  Wallet = "wallet",
-}
+import InterestSelection from "~/components/onboarding/InterestSelection";
+import { Tab } from "~/types/navigation"; 
 
 export interface AppProps {
   title?: string;
 }
 
-/**
- * App component serves as the main container for the mini app interface.
- * 
- * This component orchestrates the overall mini app experience by:
- * - Managing tab navigation and state
- * - Handling Farcaster mini app initialization
- * - Coordinating wallet and context state
- * - Providing error handling and loading states
- * - Rendering the appropriate tab content based on user selection
- * 
- * The component integrates with the Neynar SDK for Farcaster functionality
- * and Wagmi for wallet management. It provides a complete mini app
- * experience with multiple tabs for different functionality areas.
- * 
- * Features:
- * - Tab-based navigation (Home, Actions, Context, Wallet)
- * - Farcaster mini app integration
- * - Wallet connection management
- * - Error handling and display
- * - Loading states for async operations
- * 
- * @param props - Component props
- * @param props.title - Optional title for the mini app (defaults to "Neynar Starter Kit")
- * 
- * @example
- * ```tsx
- * <App title="My Mini App" />
- * ```
- */
 export default function App(
-  { title }: AppProps = { title: "Neynar Starter Kit" }
+  { title }: AppProps = { title: "Stakely" }
 ) {
   // --- Hooks ---
   const {
@@ -61,38 +26,81 @@ export default function App(
     currentTab,
   } = useMiniApp();
 
-  // --- Neynar user hook ---
   const { user: neynarUser } = useNeynarUser(context || undefined);
+  
+  // --- State ---
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(false);
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [selectedInterests, setSelectedInterests] = useState<string[]>([]);
 
-  // --- Effects ---
-  /**
-   * Sets the initial tab to "home" when the SDK is loaded.
-   * 
-   * This effect ensures that users start on the home tab when they first
-   * load the mini app. It only runs when the SDK is fully loaded to
-   * prevent errors during initialization.
-   */
-  useEffect(() => {
-    if (isSDKLoaded) {
-      setInitialTab(Tab.Home);
-    }
-  }, [isSDKLoaded, setInitialTab]);
+  // --- Handlers ---
+  const handleOnboardingComplete = (interests: string[]) => {
+    // Save interests in state only (no localStorage)
+    setSelectedInterests(interests);
+    
+    // Start transition animation
+    setIsTransitioning(true);
+    
+    // Wait for animation then navigate to Market
+    setTimeout(() => {
+      setHasCompletedOnboarding(true);
+      setIsTransitioning(false);
+      // Navigate directly to Market tab
+      setInitialTab(Tab.Market);
+      setActiveTab(Tab.Market);
+    }, 1200);
+  };
 
   // --- Early Returns ---
+  
+  // Show loading while SDK loads
   if (!isSDKLoaded) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <div className="spinner h-8 w-8 mx-auto mb-4"></div>
-          <p>Loading SDK...</p>
+      <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118]">
+        <div className="text-center px-4">
+          <div className="relative w-16 h-16 mx-auto mb-4">
+            <div className="absolute inset-0 rounded-full border-4 border-[#7C3AED]/30"></div>
+            <div className="absolute inset-0 rounded-full border-4 border-t-[#7C3AED] animate-spin"></div>
+          </div>
+          <p className="text-white font-bold text-sm">Loading Arena...</p>
         </div>
       </div>
     );
   }
 
-  // --- Render ---
+  // Show transition screen
+  if (isTransitioning) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] animate-fadeIn">
+        <div className="text-center px-4 animate-slideUp">
+          <div className="relative w-20 h-20 mx-auto mb-6">
+            <div className="absolute inset-0 rounded-full border-4 border-[#7C3AED]/30"></div>
+            <div className="absolute inset-0 rounded-full border-4 border-t-[#7C3AED] animate-spin"></div>
+            <div className="absolute inset-0 bg-[#7C3AED] rounded-full blur-xl opacity-50 animate-pulse"></div>
+          </div>
+          <h2 
+            className="text-3xl font-black text-white mb-2 uppercase tracking-tight"
+            style={{ fontFamily: '"Bebas Neue", sans-serif' }}
+          >
+            Entering Arena
+          </h2>
+          <p className="text-[#7C3AED] font-bold text-sm animate-pulse">
+            Loading your market...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show onboarding for users who haven't completed it
+  if (!hasCompletedOnboarding) {
+    return <InterestSelection onComplete={handleOnboardingComplete} />;
+  }
+
+  // --- Render Main App - MARKET TAB IS DEFAULT ---
   return (
     <div
+      className="fixed inset-0 bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] flex flex-col overflow-hidden animate-fadeIn"
       style={{
         paddingTop: context?.client.safeAreaInsets?.top ?? 0,
         paddingBottom: context?.client.safeAreaInsets?.bottom ?? 0,
@@ -100,24 +108,26 @@ export default function App(
         paddingRight: context?.client.safeAreaInsets?.right ?? 0,
       }}
     >
-      {/* Header should be full width */}
+      {/* Header */}
       <Header neynarUser={neynarUser} />
 
-      {/* Main content and footer should be centered */}
-      <div className="container py-2 pb-20">
-        {/* Main title */}
-        <h1 className="text-2xl font-bold text-center mb-4">{title}</h1>
-
-        {/* Tab content rendering */}
-        {currentTab === Tab.Home && <HomeTab />}
-        {currentTab === Tab.Actions && <ActionsTab />}
-        {currentTab === Tab.Context && <ContextTab />}
-        {currentTab === Tab.Wallet && <WalletTab />}
-
-        {/* Footer with navigation */}
-        <Footer activeTab={currentTab as Tab} setActiveTab={setActiveTab} showWallet={USE_WALLET} />
+      {/* Main Content - Scrollable */}
+      <div className="flex-1 overflow-y-auto pb-20">
+        <div className="px-4 py-3">
+          {/* Market tab is default - shows if currentTab is Market or undefined */}
+          {(currentTab === Tab.Market || !currentTab) && <MarketTab />}
+          {currentTab === Tab.Create && <CreateTab />}
+          {currentTab === Tab.Leaderboard && <LeaderboardTab />}
+          {currentTab === Tab.Rewards && <RewardsTab />}
+        </div>
       </div>
+
+      {/* Footer Navigation - Market is default active */}
+      <Footer 
+        activeTab={(currentTab as Tab) || Tab.Market} 
+        setActiveTab={setActiveTab} 
+        showWallet={USE_WALLET} 
+      />
     </div>
   );
 }
-
