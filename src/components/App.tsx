@@ -1,6 +1,6 @@
 // app/App.tsx
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMiniApp } from "@neynar/react";
 import { Header } from "~/components/ui/Header";
 import { Footer } from "~/components/ui/Footer";
@@ -8,6 +8,8 @@ import { MarketTab, CreateTab, LeaderboardTab, RewardsTab } from "~/components/u
 import { USE_WALLET } from "~/lib/constants";
 import { useNeynarUser } from "../hooks/useNeynarUser";
 import InterestSelection from "~/components/onboarding/InterestSelection";
+import { checkUserExists } from "~/lib/api";
+import { getNeynarUsername, getNeynarWalletAddress } from "~/lib/neynarUtils";
 import { Tab } from "~/types/navigation"; 
 
 export interface AppProps {
@@ -17,7 +19,6 @@ export interface AppProps {
 export default function App(
   { title }: AppProps = { title: "Stakely" }
 ) {
-  // --- Hooks ---
   const {
     isSDKLoaded,
     context,
@@ -28,32 +29,70 @@ export default function App(
 
   const { user: neynarUser } = useNeynarUser(context || undefined);
   
-  // --- State ---
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [selectedInterests, setSelectedInterests] = useState<string[]>([]);
+  const [isCheckingUser, setIsCheckingUser] = useState(true);
+  const [registrationError, setRegistrationError] = useState<string | null>(null);
 
-  // --- Handlers ---
+  // Check if user exists in backend when component mounts
+  useEffect(() => {
+    async function checkUser() {
+      // Get username using utility function
+      const username = getNeynarUsername(neynarUser);
+      
+      if (!isSDKLoaded || !username) {
+        setIsCheckingUser(false);
+        return;
+      }
+
+      try {
+        setIsCheckingUser(true);
+        const response = await checkUserExists(username);
+        
+        if (response.success && response.data) {
+          // User exists - skip onboarding
+          console.log('User found:', response.data);
+          setHasCompletedOnboarding(true);
+          setSelectedInterests(response.data.interests || []);
+          setInitialTab(Tab.Market);
+          setActiveTab(Tab.Market);
+        } else {
+          // User doesn't exist - show onboarding
+          console.log('User not found, showing onboarding');
+          setHasCompletedOnboarding(false);
+        }
+      } catch (error) {
+        console.error('Error checking user:', error);
+        // On error, show onboarding to be safe
+        setHasCompletedOnboarding(false);
+      } finally {
+        setIsCheckingUser(false);
+      }
+    }
+
+    checkUser();
+  }, [isSDKLoaded, neynarUser, setInitialTab, setActiveTab]);
+
   const handleOnboardingComplete = (interests: string[]) => {
-    // Save interests in state only (no localStorage)
     setSelectedInterests(interests);
-    
-    // Start transition animation
     setIsTransitioning(true);
+    setRegistrationError(null);
     
-    // Wait for animation then navigate to Market
     setTimeout(() => {
       setHasCompletedOnboarding(true);
       setIsTransitioning(false);
-      // Navigate directly to Market tab
       setInitialTab(Tab.Market);
       setActiveTab(Tab.Market);
     }, 1200);
   };
 
-  // --- Early Returns ---
-  
-  // Show loading while SDK loads
+  const handleRegistrationError = (error: string) => {
+    setRegistrationError(error);
+    console.error('Registration error:', error);
+  };
+
+  // Loading state while SDK initializes
   if (!isSDKLoaded) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118]">
@@ -68,7 +107,23 @@ export default function App(
     );
   }
 
-  // Show transition screen
+  // Loading state while checking user existence
+  if (isCheckingUser) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118]">
+        <div className="text-center px-4">
+          <div className="relative w-16 h-16 mx-auto mb-4">
+            <div className="absolute inset-0 rounded-full border-4 border-[#7C3AED]/30"></div>
+            <div className="absolute inset-0 rounded-full border-4 border-t-[#7C3AED] animate-spin"></div>
+            <div className="absolute inset-0 bg-[#7C3AED] rounded-full blur-xl opacity-50 animate-pulse"></div>
+          </div>
+          <p className="text-white font-bold text-sm">Checking your profile...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Transition animation when completing onboarding
   if (isTransitioning) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] animate-fadeIn">
@@ -92,15 +147,22 @@ export default function App(
     );
   }
 
-  // Show onboarding for users who haven't completed it
+  // Show onboarding if user hasn't completed it
   if (!hasCompletedOnboarding) {
-    return <InterestSelection onComplete={handleOnboardingComplete} />;
+    return (
+      <InterestSelection 
+        onComplete={handleOnboardingComplete}
+        farcasterUsername={getNeynarUsername(neynarUser)}
+        farcasterWalletAddress={getNeynarWalletAddress(neynarUser)}
+        onError={handleRegistrationError}
+      />
+    );
   }
 
-  // --- Render Main App - MARKET TAB IS DEFAULT ---
+  // Main app interface
   return (
     <div
-      className="fixed inset-0 bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] flex flex-col overflow-hidden animate-fadeIn"
+      className="fixed inset-0 bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] flex flex-col overflow-hidden"
       style={{
         paddingTop: context?.client.safeAreaInsets?.top ?? 0,
         paddingBottom: context?.client.safeAreaInsets?.bottom ?? 0,
@@ -108,13 +170,15 @@ export default function App(
         paddingRight: context?.client.safeAreaInsets?.right ?? 0,
       }}
     >
-      {/* Header */}
-      <Header neynarUser={neynarUser} />
+      {/* Header - z-10 */}
+      <div className="relative z-10 flex-shrink-0">
+        <Header neynarUser={neynarUser} />
+      </div>
 
-      {/* Main Content - Scrollable */}
-      <div className="flex-1 overflow-y-auto pb-20">
-        <div className="px-4 py-3">
-          {/* Market tab is default - shows if currentTab is Market or undefined */}
+      {/* Main Content - z-0, EXTRA bottom padding to clear footer */}
+      <div className="flex-1 overflow-y-auto relative z-0">
+        <div className="px-4 py-3 pb-28">
+          {/* pb-28 = 112px of clearance for footer */}
           {(currentTab === Tab.Market || !currentTab) && <MarketTab />}
           {currentTab === Tab.Create && <CreateTab />}
           {currentTab === Tab.Leaderboard && <LeaderboardTab />}
@@ -122,12 +186,14 @@ export default function App(
         </div>
       </div>
 
-      {/* Footer Navigation - Market is default active */}
-      <Footer 
-        activeTab={(currentTab as Tab) || Tab.Market} 
-        setActiveTab={setActiveTab} 
-        showWallet={USE_WALLET} 
-      />
+      {/* Footer - z-40 (below modals at z-100, above content) */}
+      <div className="relative z-40 flex-shrink-0">
+        <Footer 
+          activeTab={(currentTab as Tab) || Tab.Market} 
+          setActiveTab={setActiveTab} 
+          showWallet={USE_WALLET} 
+        />
+      </div>
     </div>
   );
 }

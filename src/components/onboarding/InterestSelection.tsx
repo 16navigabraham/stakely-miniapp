@@ -1,6 +1,7 @@
 // components/onboarding/InterestSelection.tsx
 "use client";
 import { useState } from 'react';
+import { createUser } from '~/lib/api';
 
 interface Interest {
   id: string;
@@ -23,15 +24,27 @@ const INTERESTS: Interest[] = [
 
 interface InterestSelectionProps {
   onComplete: (selectedInterests: string[]) => void;
+  farcasterUsername?: string;
+  farcasterWalletAddress?: string;
+  onError?: (error: string) => void;
 }
 
-export default function InterestSelection({ onComplete }: InterestSelectionProps) {
+export default function InterestSelection({ 
+  onComplete, 
+  farcasterUsername,
+  farcasterWalletAddress,
+  onError 
+}: InterestSelectionProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [animatingId, setAnimatingId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const toggleInterest = (id: string) => {
     if (isSubmitting) return;
+    
+    // Clear error when user interacts
+    if (error) setError(null);
     
     // Trigger animation
     setAnimatingId(id);
@@ -46,13 +59,39 @@ export default function InterestSelection({ onComplete }: InterestSelectionProps
     setSelected(newSelected);
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (selected.size >= 3 && !isSubmitting) {
       setIsSubmitting(true);
-      // Pass selected interests to parent
-      setTimeout(() => {
-        onComplete(Array.from(selected));
-      }, 300);
+      setError(null);
+
+      try {
+        // If we have user data, register with backend
+        if (farcasterUsername && farcasterWalletAddress) {
+          const response = await createUser({
+            farcasterUsername,
+            interests: Array.from(selected),
+            farcasterWalletAddress,
+          });
+
+          if (!response.success) {
+            const errorMessage = response.errors?.join(', ') || response.message || 'Failed to create user';
+            setError(errorMessage);
+            if (onError) onError(errorMessage);
+            setIsSubmitting(false);
+            return;
+          }
+        }
+
+        // Success - proceed with onboarding completion
+        setTimeout(() => {
+          onComplete(Array.from(selected));
+        }, 300);
+      } catch (err) {
+        const errorMessage = 'Network error. Please check your connection and try again.';
+        setError(errorMessage);
+        if (onError) onError(errorMessage);
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -111,6 +150,15 @@ export default function InterestSelection({ onComplete }: InterestSelectionProps
             )}
           </div>
         </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="mb-4 p-4 bg-red-500/10 border border-red-500/50 rounded-xl backdrop-blur-md animate-slideDown">
+            <p className="text-red-400 text-sm text-center font-medium">
+              {error}
+            </p>
+          </div>
+        )}
 
         {/* Interest Grid - Mobile Optimized */}
         <div className="flex-1 mb-6">
@@ -197,7 +245,7 @@ export default function InterestSelection({ onComplete }: InterestSelectionProps
               {isSubmitting ? (
                 <>
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  Loading...
+                  Registering...
                 </>
               ) : (
                 <>
