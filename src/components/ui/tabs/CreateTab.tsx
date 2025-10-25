@@ -69,7 +69,6 @@ export function CreateTab() {
   // ============================================
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<any>(null);
-  const [isWalletReady, setIsWalletReady] = useState(false);
 
   // ============================================
   // FORM STATE
@@ -110,56 +109,37 @@ export function CreateTab() {
   } = useCreateChallenge(provider, signer, CONTRACT_ADDRESS, USDC_ADDRESS, API_BASE_URL);
 
   // ============================================
-  // SETUP PROVIDER FROM FARCASTER WALLET
+  // SETUP PROVIDER FROM FARCASTER WALLET (SIMPLIFIED)
   // ============================================
 
   useEffect(() => {
-    const setupFarcasterWallet = async () => {
-      if (!farcasterWalletAddress || !window.ethereum) {
-        setIsWalletReady(false);
+    const setupWallet = async () => {
+      if (!window.ethereum) {
+        console.log('❌ No ethereum provider');
         return;
       }
 
       try {
-        // Create provider from window.ethereum (Farcaster wallet)
+        console.log('🔌 Setting up wallet...');
+        
+        // Just use the connected wallet directly (Farcaster wallet is already connected)
         const provider = new BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const address = await signer.getAddress();
         
-        // Check if we're connected to the right address
-        const accounts = await provider.listAccounts();
-        const currentAccount = accounts[0]?.address.toLowerCase();
+        setProvider(provider);
+        setSigner(signer);
         
-        if (currentAccount === farcasterWalletAddress.toLowerCase()) {
-          const signer = await provider.getSigner();
-          setProvider(provider);
-          setSigner(signer);
-          setIsWalletReady(true);
-          console.log('✅ Farcaster wallet connected:', farcasterWalletAddress);
-        } else {
-          // Request account switch to Farcaster wallet
-          try {
-            await window.ethereum.request({
-              method: 'wallet_requestPermissions',
-              params: [{ eth_accounts: {} }],
-            });
-            
-            // Retry after permission request
-            const newProvider = new BrowserProvider(window.ethereum);
-            const newSigner = await newProvider.getSigner();
-            setProvider(newProvider);
-            setSigner(newSigner);
-            setIsWalletReady(true);
-          } catch (error) {
-            console.error('Failed to switch to Farcaster wallet:', error);
-            setIsWalletReady(false);
-          }
-        }
+        console.log('✅ Wallet connected:', address);
       } catch (error) {
-        console.error('Failed to setup Farcaster wallet:', error);
-        setIsWalletReady(false);
+        console.error('❌ Wallet setup error:', error);
       }
     };
 
-    setupFarcasterWallet();
+    // Give Farcaster wallet a moment to inject
+    if (farcasterWalletAddress) {
+      setTimeout(setupWallet, 300);
+    }
   }, [farcasterWalletAddress]);
 
   // ============================================
@@ -264,8 +244,8 @@ export function CreateTab() {
 
   const handleSubmit = async () => {
     // Check wallet connection
-    if (!isWalletReady || !signer) {
-      alert('Please wait for your Farcaster wallet to connect');
+    if (!signer) {
+      alert('Please wait for your wallet to connect');
       return;
     }
 
@@ -378,50 +358,7 @@ export function CreateTab() {
   };
 
   // ============================================
-  // RENDER - WALLET NOT READY
-  // ============================================
-
-  if (!isWalletReady) {
-    return (
-      <div className="h-screen bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] flex items-center justify-center p-4">
-        <div className="bg-black/60 backdrop-blur-xl border-2 border-[#7C3AED] rounded-2xl p-8 max-w-md w-full text-center">
-          <div className="relative w-16 h-16 mx-auto mb-4">
-            <div className="absolute inset-0 rounded-full border-4 border-[#7C3AED]/30"></div>
-            <div className="absolute inset-0 rounded-full border-4 border-t-[#7C3AED] animate-spin"></div>
-          </div>
-          <h2 className="text-2xl font-black text-white mb-4 uppercase">
-            Connecting Farcaster Wallet
-          </h2>
-          <p className="text-gray-400 text-sm mb-2">
-            Setting up your wallet connection...
-          </p>
-          {farcasterWalletAddress && (
-            <p className="text-gray-500 text-xs mt-4 font-mono">
-              {farcasterWalletAddress.slice(0, 6)}...{farcasterWalletAddress.slice(-4)}
-            </p>
-          )}
-          
-          <div className="mt-6 space-y-2 text-left text-sm text-gray-400">
-            <div className="flex items-center gap-2">
-              <span>✅</span>
-              <span>Single-transaction creation on Base</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✅</span>
-              <span>Using your Farcaster wallet</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span>✅</span>
-              <span>Secure smart contract integration</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ============================================
-  // RENDER - MAIN FORM
+  // RENDER - MAIN FORM (NO LOADING SCREEN)
   // ============================================
 
   return (
@@ -460,10 +397,14 @@ export function CreateTab() {
           </div>
           
           <button
-            onClick={() => alert(`Connected as @${farcasterUsername}\n\nWallet: ${farcasterWalletAddress}`)}
+            onClick={() => {
+              if (farcasterWalletAddress) {
+                alert(`Connected as @${farcasterUsername}\n\nWallet: ${farcasterWalletAddress}`);
+              }
+            }}
             className="text-xs text-gray-400 hover:text-white transition-colors"
           >
-            @{farcasterUsername}
+            @{farcasterUsername || '...'}
           </button>
         </div>
       </div>
