@@ -69,6 +69,9 @@ export function CreateTab() {
   // ============================================
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<any>(null);
+  const [walletConnecting, setWalletConnecting] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [needsWalletPrompt, setNeedsWalletPrompt] = useState(false);
 
   // ============================================
   // FORM STATE
@@ -109,38 +112,118 @@ export function CreateTab() {
   } = useCreateChallenge(provider, signer, CONTRACT_ADDRESS, USDC_ADDRESS, API_BASE_URL);
 
   // ============================================
-  // SETUP PROVIDER FROM FARCASTER WALLET (SIMPLIFIED)
+  // WALLET CONNECTION WITH NEYNAR
   // ============================================
 
+  const requestWalletConnection = async () => {
+    try {
+      setWalletConnecting(true);
+      setWalletError(null);
+      setNeedsWalletPrompt(false);
+
+      console.log('🔌 Requesting Farcaster wallet connection...');
+
+      // Check if window.ethereum is available
+      if (!window.ethereum) {
+        throw new Error('No Ethereum provider found. Please ensure you are using the Farcaster app.');
+      }
+
+      // Request accounts (this will prompt the user if not already connected)
+      const accounts = await window.ethereum.request({ 
+        method: 'eth_requestAccounts' 
+      });
+
+      if (!accounts || accounts.length === 0) {
+        throw new Error('No accounts found. Please connect your wallet.');
+      }
+
+      // Create ethers provider and signer
+      const provider = new BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const address = await signer.getAddress();
+
+      setProvider(provider);
+      setSigner(signer);
+      setWalletConnecting(false);
+
+      console.log('✅ Farcaster wallet connected:', address);
+      
+      return true;
+    } catch (error: any) {
+      console.error('❌ Wallet connection error:', error);
+      
+      // Handle user rejection
+      if (error.code === 4001 || error.code === 'ACTION_REJECTED') {
+        setWalletError('Connection rejected. Please approve the connection to continue.');
+      } else {
+        setWalletError(error.message || 'Failed to connect Farcaster wallet');
+      }
+      
+      setWalletConnecting(false);
+      setNeedsWalletPrompt(true);
+      return false;
+    }
+  };
+
+  // Auto-connect wallet when component mounts
   useEffect(() => {
     const setupWallet = async () => {
-      if (!window.ethereum) {
-        console.log('❌ No ethereum provider');
+      // Check if we have Farcaster user data
+      if (!farcasterWalletAddress) {
+        console.log('⏳ Waiting for Farcaster user data...');
         return;
       }
 
+      // Check if window.ethereum is available (Farcaster wallet injected)
+      if (!window.ethereum) {
+        console.log('❌ No ethereum provider, will prompt connection');
+        setNeedsWalletPrompt(true);
+        return;
+      }
+
+      setWalletConnecting(true);
+
       try {
-        console.log('🔌 Setting up wallet...');
+        console.log('🔌 Auto-connecting to Farcaster wallet...');
         
-        // Just use the connected wallet directly (Farcaster wallet is already connected)
+        // Try to get accounts without prompting (if already connected)
+        const accounts = await window.ethereum.request({ 
+          method: 'eth_accounts' 
+        });
+
+        if (!accounts || accounts.length === 0) {
+          console.log('⚠️ No accounts found, will prompt connection');
+          setWalletConnecting(false);
+          setNeedsWalletPrompt(true);
+          return;
+        }
+        
+        // Try to connect to already injected wallet
         const provider = new BrowserProvider(window.ethereum);
         const signer = await provider.getSigner();
         const address = await signer.getAddress();
         
         setProvider(provider);
         setSigner(signer);
+        setWalletConnecting(false);
         
-        console.log('✅ Wallet connected:', address);
-      } catch (error) {
-        console.error('❌ Wallet setup error:', error);
+        console.log('✅ Wallet auto-connected:', address);
+      } catch (error: any) {
+        console.log('⚠️ Auto-connect failed, will prompt user:', error.message);
+        setWalletConnecting(false);
+        setNeedsWalletPrompt(true);
       }
     };
 
     // Give Farcaster wallet a moment to inject
-    if (farcasterWalletAddress) {
-      setTimeout(setupWallet, 300);
-    }
+    const timer = setTimeout(setupWallet, 500);
+    return () => clearTimeout(timer);
   }, [farcasterWalletAddress]);
+
+  // Manual retry function
+  const retryWalletConnection = async () => {
+    await requestWalletConnection();
+  };
 
   // ============================================
   // HELPER FUNCTIONS
@@ -228,11 +311,19 @@ export function CreateTab() {
     }
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (canGoNext()) {
       if (step < 4) {
         setStep(step + 1);
       } else {
+        // On step 4, check wallet before submitting
+        if (!signer && !walletConnecting) {
+          // Prompt wallet connection
+          const connected = await requestWalletConnection();
+          if (!connected) {
+            return; // Don't proceed if connection failed
+          }
+        }
         handleSubmit();
       }
     }
@@ -243,10 +334,20 @@ export function CreateTab() {
   // ============================================
 
   const handleSubmit = async () => {
-    // Check wallet connection
-    if (!signer) {
-      alert('Please wait for your wallet to connect');
+    // Check wallet connection - IMPROVED
+    if (walletConnecting) {
+      alert('⏳ Wallet is still connecting. Please wait a moment...');
       return;
+    }
+
+    if (!signer || !provider) {
+      // Try to connect wallet
+      const connected = await requestWalletConnection();
+      if (!connected) {
+        alert('❌ Please connect your Farcaster wallet to continue.');
+        return;
+      }
+      return; // Will retry after connection
     }
 
     // Check Farcaster username
@@ -335,6 +436,10 @@ export function CreateTab() {
   // ============================================
 
   const getProgressMessage = () => {
+    if (walletConnecting) {
+      return '🔌 Connecting Farcaster wallet...';
+    }
+    
     switch (createStep) {
       case 'checking_permit':
         return '🔍 Checking permit support...';
@@ -358,7 +463,7 @@ export function CreateTab() {
   };
 
   // ============================================
-  // RENDER - MAIN FORM (NO LOADING SCREEN)
+  // RENDER - MAIN FORM
   // ============================================
 
   return (
@@ -377,7 +482,7 @@ export function CreateTab() {
           {step > 1 ? (
             <button
               onClick={() => setStep(step - 1)}
-              disabled={isCreating}
+              disabled={isCreating || walletConnecting}
               className="p-2 rounded-lg bg-black/40 border border-gray-700 text-white active:scale-95 transition-transform disabled:opacity-50"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -398,8 +503,12 @@ export function CreateTab() {
           
           <button
             onClick={() => {
-              if (farcasterWalletAddress) {
-                alert(`Connected as @${farcasterUsername}\n\nWallet: ${farcasterWalletAddress}`);
+              if (signer) {
+                alert(`✅ Connected as @${farcasterUsername}\n\nWallet: ${farcasterWalletAddress}`);
+              } else if (walletConnecting) {
+                alert('⏳ Wallet is connecting...');
+              } else {
+                requestWalletConnection();
               }
             }}
             className="text-xs text-gray-400 hover:text-white transition-colors"
@@ -408,6 +517,72 @@ export function CreateTab() {
           </button>
         </div>
       </div>
+
+      {/* Wallet Prompt Banner */}
+      {needsWalletPrompt && !signer && !walletConnecting && step === 4 && (
+        <div className="px-4 pb-2">
+          <div className="bg-[#7C3AED]/20 border border-[#7C3AED] rounded-xl p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <p className="text-white font-bold text-sm mb-1">🔐 Connect Farcaster Wallet</p>
+                <p className="text-gray-300 text-xs">
+                  Connect your Farcaster wallet to create challenges
+                </p>
+              </div>
+              <button
+                onClick={requestWalletConnection}
+                disabled={walletConnecting}
+                className="ml-4 bg-[#7C3AED] hover:bg-[#6d2fd1] text-white font-bold py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+              >
+                Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Wallet Connection Status Banner */}
+      {walletConnecting && (
+        <div className="px-4 pb-2">
+          <div className="bg-blue-500/20 border border-blue-500 rounded-xl p-3">
+            <div className="flex items-center gap-3">
+              <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+              <span className="text-white text-sm font-medium">
+                🔌 Connecting Farcaster wallet...
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Wallet Error Banner */}
+      {walletError && !walletConnecting && (
+        <div className="px-4 pb-2">
+          <div className="bg-orange-500/20 border border-orange-500 rounded-xl p-3">
+            <p className="text-white text-sm">⚠️ {walletError}</p>
+            <button
+              onClick={retryWalletConnection}
+              className="text-orange-400 text-xs underline mt-1 hover:text-orange-300"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Wallet Connected Success Banner */}
+      {signer && !isCreating && step === 4 && (
+        <div className="px-4 pb-2">
+          <div className="bg-green-500/20 border border-green-500 rounded-xl p-3">
+            <div className="flex items-center gap-2">
+              <span className="text-green-400 text-lg">✓</span>
+              <span className="text-white text-sm font-medium">
+                Farcaster wallet connected
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Blockchain Status Banner */}
       {isCreating && (
@@ -740,14 +915,19 @@ export function CreateTab() {
       <div className="fixed bottom-20 left-0 right-0 px-4 pb-4 pt-2 bg-gradient-to-t from-[#0a0118] via-[#0a0118] to-transparent z-40">
         <button
           onClick={handleNext}
-          disabled={!canGoNext() || isCreating}
+          disabled={!canGoNext() || isCreating || walletConnecting}
           className={`w-full py-4 rounded-xl font-black text-lg uppercase tracking-wider transition-all duration-300 ${
-            canGoNext() && !isCreating
+            canGoNext() && !isCreating && !walletConnecting
               ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white shadow-lg shadow-purple-500/50 active:scale-95'
               : 'bg-gray-800 text-gray-500 opacity-50 cursor-not-allowed'
           }`}
         >
-          {isCreating ? (
+          {walletConnecting ? (
+            <span className="flex items-center justify-center gap-2">
+              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+              Connecting Wallet...
+            </span>
+          ) : isCreating ? (
             <span className="flex items-center justify-center gap-2">
               <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
               {getProgressMessage()}
@@ -759,6 +939,8 @@ export function CreateTab() {
                 <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
               </svg>
             </span>
+          ) : !signer ? (
+            '🔐 Connect Wallet to Continue'
           ) : (
             '🚀 Launch Challenge'
           )}
