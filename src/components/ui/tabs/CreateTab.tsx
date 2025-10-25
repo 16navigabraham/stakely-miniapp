@@ -4,6 +4,9 @@ import { useState, useEffect } from 'react';
 import { BrowserProvider } from 'ethers';
 import { TimePicker } from '../TimePicker';
 import { useCreateChallenge } from '~/hooks/useCreateChallenge';
+import { useMiniApp } from '@neynar/react';
+import { useNeynarUser } from '~/hooks/useNeynarUser';
+import { getNeynarUsername, getNeynarWalletAddress } from '~/lib/neynarUtils';
 
 // ============================================
 // CONFIGURATION
@@ -53,17 +56,23 @@ const STAKE_PRESETS = [10, 25, 50, 100, 250, 500];
 
 export function CreateTab() {
   // ============================================
+  // NEYNAR CONTEXT & USER
+  // ============================================
+  const { context } = useMiniApp();
+  const { user: neynarUser } = useNeynarUser(context || undefined);
+  
+  const farcasterUsername = getNeynarUsername(neynarUser) || '';
+  const farcasterWalletAddress = getNeynarWalletAddress(neynarUser);
+  
+  // ============================================
   // WALLET STATE
   // ============================================
   const [provider, setProvider] = useState<BrowserProvider | null>(null);
   const [signer, setSigner] = useState<any>(null);
-  const [userAddress, setUserAddress] = useState<string | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [farcasterUsername, setFarcasterUsername] = useState<string>('');
-  const [showUsernamePrompt, setShowUsernamePrompt] = useState(false);
+  const [isWalletReady, setIsWalletReady] = useState(false);
 
   // ============================================
-  // FORM STATE (Your existing state)
+  // FORM STATE
   // ============================================
   const [step, setStep] = useState(1);
   const [bannerImage, setBannerImage] = useState<string | null>(null);
@@ -97,51 +106,61 @@ export function CreateTab() {
     error: createError,
     step: createStep,
     onchainData,
-    apiResponse,
-    supportsPermit,
     reset: resetCreate,
   } = useCreateChallenge(provider, signer, CONTRACT_ADDRESS, USDC_ADDRESS, API_BASE_URL);
 
   // ============================================
-  // WALLET CONNECTION
+  // SETUP PROVIDER FROM FARCASTER WALLET
   // ============================================
 
-  const connectWallet = async () => {
-    if (typeof window.ethereum === 'undefined') {
-      alert('Please install MetaMask or another Web3 wallet');
-      return;
-    }
-
-    try {
-      await window.ethereum.request({ method: 'eth_requestAccounts' });
-      const provider = new BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-
-      setProvider(provider);
-      setSigner(signer);
-      setUserAddress(address);
-      setIsConnected(true);
-      
-      // Prompt for Farcaster username
-      setShowUsernamePrompt(true);
-    } catch (error) {
-      console.error('Failed to connect wallet:', error);
-      alert('Failed to connect wallet');
-    }
-  };
-
-  // Auto-connect on mount
   useEffect(() => {
-    if (typeof window.ethereum !== 'undefined') {
-      window.ethereum.request({ method: 'eth_accounts' })
-        .then((accounts: string[]) => {
-          if (accounts.length > 0) {
-            connectWallet();
+    const setupFarcasterWallet = async () => {
+      if (!farcasterWalletAddress || !window.ethereum) {
+        setIsWalletReady(false);
+        return;
+      }
+
+      try {
+        // Create provider from window.ethereum (Farcaster wallet)
+        const provider = new BrowserProvider(window.ethereum);
+        
+        // Check if we're connected to the right address
+        const accounts = await provider.listAccounts();
+        const currentAccount = accounts[0]?.address.toLowerCase();
+        
+        if (currentAccount === farcasterWalletAddress.toLowerCase()) {
+          const signer = await provider.getSigner();
+          setProvider(provider);
+          setSigner(signer);
+          setIsWalletReady(true);
+          console.log('✅ Farcaster wallet connected:', farcasterWalletAddress);
+        } else {
+          // Request account switch to Farcaster wallet
+          try {
+            await window.ethereum.request({
+              method: 'wallet_requestPermissions',
+              params: [{ eth_accounts: {} }],
+            });
+            
+            // Retry after permission request
+            const newProvider = new BrowserProvider(window.ethereum);
+            const newSigner = await newProvider.getSigner();
+            setProvider(newProvider);
+            setSigner(newSigner);
+            setIsWalletReady(true);
+          } catch (error) {
+            console.error('Failed to switch to Farcaster wallet:', error);
+            setIsWalletReady(false);
           }
-        });
-    }
-  }, []);
+        }
+      } catch (error) {
+        console.error('Failed to setup Farcaster wallet:', error);
+        setIsWalletReady(false);
+      }
+    };
+
+    setupFarcasterWallet();
+  }, [farcasterWalletAddress]);
 
   // ============================================
   // HELPER FUNCTIONS
@@ -213,7 +232,7 @@ export function CreateTab() {
       reader.readAsDataURL(file);
       reader.onload = () => {
         const base64 = reader.result as string;
-        resolve(base64.split(',')[1]); // Remove data:image/jpeg;base64, prefix
+        resolve(base64.split(',')[1]);
       };
       reader.onerror = reject;
     });
@@ -245,14 +264,14 @@ export function CreateTab() {
 
   const handleSubmit = async () => {
     // Check wallet connection
-    if (!isConnected || !signer) {
-      alert('Please connect your wallet first');
+    if (!isWalletReady || !signer) {
+      alert('Please wait for your Farcaster wallet to connect');
       return;
     }
 
     // Check Farcaster username
     if (!farcasterUsername) {
-      setShowUsernamePrompt(true);
+      alert('Farcaster username not found. Please try again.');
       return;
     }
 
@@ -290,8 +309,6 @@ export function CreateTab() {
 
       // Call the hook to create challenge
       await createChallenge(challengeData);
-
-      // If successful, onchainData and apiResponse will be set
     } catch (error: any) {
       console.error('❌ Submit error:', error);
       alert(`Error: ${error.message || 'Failed to create challenge'}`);
@@ -361,76 +378,37 @@ export function CreateTab() {
   };
 
   // ============================================
-  // RENDER - USERNAME PROMPT
+  // RENDER - WALLET NOT READY
   // ============================================
 
-  if (showUsernamePrompt && !farcasterUsername) {
-    return (
-      <div className="h-screen bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] flex items-center justify-center p-4">
-        <div className="bg-black/60 backdrop-blur-xl border-2 border-[#7C3AED] rounded-2xl p-8 max-w-md w-full">
-          <h2 className="text-2xl font-black text-white mb-4 text-center uppercase">
-            Enter Farcaster Username
-          </h2>
-          <p className="text-gray-400 text-sm mb-6 text-center">
-            Connected: {userAddress?.slice(0, 6)}...{userAddress?.slice(-4)}
-          </p>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const input = e.target as any;
-              const username = input.username.value.trim();
-              if (username) {
-                setFarcasterUsername(username);
-                setShowUsernamePrompt(false);
-              }
-            }}
-            className="space-y-4"
-          >
-            <input
-              name="username"
-              type="text"
-              placeholder="abrahamnavig"
-              className="w-full bg-black/40 border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white outline-none"
-              autoFocus
-            />
-            <button
-              type="submit"
-              className="w-full py-3 bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white rounded-xl font-bold"
-            >
-              Continue
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
-  // ============================================
-  // RENDER - CONNECT WALLET
-  // ============================================
-
-  if (!isConnected) {
+  if (!isWalletReady) {
     return (
       <div className="h-screen bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] flex items-center justify-center p-4">
         <div className="bg-black/60 backdrop-blur-xl border-2 border-[#7C3AED] rounded-2xl p-8 max-w-md w-full text-center">
-          <div className="text-6xl mb-4">🔗</div>
+          <div className="relative w-16 h-16 mx-auto mb-4">
+            <div className="absolute inset-0 rounded-full border-4 border-[#7C3AED]/30"></div>
+            <div className="absolute inset-0 rounded-full border-4 border-t-[#7C3AED] animate-spin"></div>
+          </div>
           <h2 className="text-2xl font-black text-white mb-4 uppercase">
-            Connect Wallet
+            Connecting Farcaster Wallet
           </h2>
-          <p className="text-gray-400 text-sm mb-6">
-            Connect your wallet to create challenges
+          <p className="text-gray-400 text-sm mb-2">
+            Setting up your wallet connection...
           </p>
-          <button
-            onClick={connectWallet}
-            className="w-full py-4 bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white rounded-xl font-bold text-lg hover:shadow-lg hover:shadow-purple-500/50 transition-all"
-          >
-            Connect Wallet
-          </button>
+          {farcasterWalletAddress && (
+            <p className="text-gray-500 text-xs mt-4 font-mono">
+              {farcasterWalletAddress.slice(0, 6)}...{farcasterWalletAddress.slice(-4)}
+            </p>
+          )}
           
           <div className="mt-6 space-y-2 text-left text-sm text-gray-400">
             <div className="flex items-center gap-2">
               <span>✅</span>
               <span>Single-transaction creation on Base</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span>✅</span>
+              <span>Using your Farcaster wallet</span>
             </div>
             <div className="flex items-center gap-2">
               <span>✅</span>
@@ -443,7 +421,7 @@ export function CreateTab() {
   }
 
   // ============================================
-  // RENDER - MAIN FORM (Your existing UI)
+  // RENDER - MAIN FORM
   // ============================================
 
   return (
@@ -482,8 +460,8 @@ export function CreateTab() {
           </div>
           
           <button
-            onClick={() => setShowUsernamePrompt(true)}
-            className="text-xs text-gray-400 hover:text-white"
+            onClick={() => alert(`Connected as @${farcasterUsername}\n\nWallet: ${farcasterWalletAddress}`)}
+            className="text-xs text-gray-400 hover:text-white transition-colors"
           >
             @{farcasterUsername}
           </button>
@@ -519,7 +497,7 @@ export function CreateTab() {
         </div>
       )}
 
-      {/* Content Area - Scrollable with extra padding at bottom */}
+      {/* Content Area - Scrollable */}
       <div className="flex-1 overflow-y-auto px-4 pb-24">
         {/* Step 1: Basic Info & Banner */}
         {step === 1 && (
@@ -772,21 +750,6 @@ export function CreateTab() {
               </span>
             </h2>
 
-            {/* Permit Support Info */}
-            {supportsPermit !== null && (
-              <div className={`p-3 rounded-xl border-2 ${
-                supportsPermit 
-                  ? 'bg-green-500/20 border-green-500' 
-                  : 'bg-yellow-500/20 border-yellow-500'
-              }`}>
-                <p className="text-white text-xs">
-                  {supportsPermit 
-                    ? '✅ Single-transaction creation enabled!'
-                    : '⚠️ Two-transaction flow (approve + create)'}
-                </p>
-              </div>
-            )}
-
             {/* Preset Stakes */}
             <div className="grid grid-cols-3 gap-2">
               {STAKE_PRESETS.map((amount) => (
@@ -832,7 +795,7 @@ export function CreateTab() {
         )}
       </div>
 
-      {/* Bottom Navigation - Fixed, ABOVE the footer navigation */}
+      {/* Bottom Navigation - Fixed */}
       <div className="fixed bottom-20 left-0 right-0 px-4 pb-4 pt-2 bg-gradient-to-t from-[#0a0118] via-[#0a0118] to-transparent z-40">
         <button
           onClick={handleNext}
