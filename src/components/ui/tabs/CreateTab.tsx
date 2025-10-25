@@ -434,10 +434,20 @@ export function CreateTab({
       throw new Error('Banner is required');
     }
 
+    console.log('💾 Starting backend save...');
+    console.log('📊 Onchain data:', onchainData);
+
     const bannerBase64 = await fileToBase64(bannerFile);
+    console.log('🖼️ Banner converted to base64, length:', bannerBase64.length);
+
     const startDateTimeUnix = parseDateTime(startDate, startTime);
     const endDateTimeUnix = parseDateTime(endDate, endTime);
     const votingDeadlineUnix = endDateTimeUnix + votingDurationHours * 3600;
+
+    console.log('⏰ Timestamps:');
+    console.log('  Start:', startDateTimeUnix, new Date(startDateTimeUnix * 1000).toISOString());
+    console.log('  End:', endDateTimeUnix, new Date(endDateTimeUnix * 1000).toISOString());
+    console.log('  Voting deadline:', votingDeadlineUnix, new Date(votingDeadlineUnix * 1000).toISOString());
 
     const payload = {
       Id: `${walletAddress?.toLowerCase()}_challenge${onchainData.challengeId}`,
@@ -466,21 +476,53 @@ export function CreateTab({
       txHash: onchainData.hash,
     };
 
-    const response = await fetch(`${API_BASE_URL}/api/create_challenge`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
+    console.log('📤 Payload to send:');
+    console.log(JSON.stringify({
+      ...payload,
+      banner: { ...payload.banner, data: `[${bannerBase64.length} chars]` }
+    }, null, 2));
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
-      throw new Error(errorData.message || `API error: ${response.status}`);
+    console.log('🌐 API endpoint:', `${API_BASE_URL}/api/create_challenge`);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/create_challenge`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      console.log('📡 Response status:', response.status, response.statusText);
+      console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+
+      const responseText = await response.text();
+      console.log('📡 Response body (raw):', responseText);
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = JSON.parse(responseText);
+        } catch {
+          errorData = { message: responseText || 'Unknown error' };
+        }
+        console.error('❌ API error response:', errorData);
+        throw new Error(errorData.message || `API error: ${response.status}`);
+      }
+
+      const result = JSON.parse(responseText);
+      console.log('✅ API success response:', result);
+      return result;
+    } catch (fetchError: any) {
+      console.error('❌ Fetch error:', fetchError);
+      console.error('Error details:', {
+        message: fetchError.message,
+        name: fetchError.name,
+        stack: fetchError.stack,
+      });
+      throw fetchError;
     }
-
-    return response.json();
   };
 
   // ============================================
@@ -923,14 +965,14 @@ export function CreateTab({
               </span>
             </h2>
 
-            {/* Permit Info Banner */}
+            {/* Info Banner - Updated */}
             <div className="bg-blue-500/20 border border-blue-500/50 rounded-xl p-4">
               <div className="flex items-start gap-3">
-                <span className="text-2xl">⚡</span>
+                <span className="text-2xl">💎</span>
                 <div>
-                  <p className="text-white font-bold text-sm mb-1">Gasless Approval Available!</p>
+                  <p className="text-white font-bold text-sm mb-1">2-Step Process</p>
                   <p className="text-gray-300 text-xs">
-                    Sign once to approve and create in a single transaction. No separate approval needed!
+                    First approve USDC spending, then create your challenge. Both transactions are secure and verified.
                   </p>
                 </div>
               </div>
