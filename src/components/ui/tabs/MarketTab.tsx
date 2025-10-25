@@ -21,43 +21,59 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://stakely-backend
 // TYPES
 // ============================================
 
-type ChallengeStatus = 'active' | 'voting' | 'completed';
+type ChallengeStatus = 'active' | 'voting' | 'completed' | 'pending' | 'cancelled';
 type FilterType = 'all' | 'active' | 'voting';
+type CategoryType = 'all' | 'sports' | 'crypto' | 'entertainment' | 'social network' | 'tech' | 'politics' | 'weather';
 
 interface Challenge {
   id: number | string;
   title: string;
   category: string;
-  description: string;
+  challengeDetails?: string;
+  description?: string;
   winCondition: string;
-  creator?: string;
-  totalStaked: number;
+  creator: string;
+  farcasterUsername?: string;
+  currentStake: number;
+  totalStaked?: number;
+  yesVotes: number;
+  noVotes: number;
+  totalVotes: number;
   yesPercentage: number;
-  noPercentage: number;
-  participants: number;
+  noPercentage?: number;
+  participants?: number;
   status: ChallengeStatus;
+  isActive: boolean;
   timeRemaining?: {
     humanReadable: string;
     expired: boolean;
+    days?: number;
+    hours?: number;
+    minutes?: number;
+    seconds?: number;
   };
-  votingTimeRemaining?: {
-    humanReadable: string;
-    expired: boolean;
-  };
-  stakePool?: {
-    total: number;
-    yes: number;
-    no: number;
-  };
-  votes?: {
-    total: number;
-    yes: number;
-    no: number;
-    yesPercentage: number;
-  };
+  startDateTime?: string;
   endDateTime?: string;
   voteEndDateTime?: string;
+  socialPlatform?: string;
+  stakeAmount?: number;
   banner?: string;
+}
+
+interface MarketStats {
+  totalChallenges: number;
+  activeChallenges: number;
+  totalStaked: number;
+  categoriesCount: Record<string, number>;
+}
+
+interface Pagination {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  itemsPerPage: number;
+  hasNext: boolean;
+  hasPrev: boolean;
 }
 
 // ============================================
@@ -107,21 +123,6 @@ const CONTRACT_ABI = [
     outputs: [],
   },
   {
-    name: 'stakeWithPermit',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: '_id', type: 'uint256' },
-      { name: '_isFor', type: 'bool' },
-      { name: '_amount', type: 'uint256' },
-      { name: 'permitDeadline', type: 'uint256' },
-      { name: 'v', type: 'uint8' },
-      { name: 'r', type: 'bytes32' },
-      { name: 's', type: 'bytes32' },
-    ],
-    outputs: [],
-  },
-  {
     name: 'vote',
     type: 'function',
     stateMutability: 'nonpayable',
@@ -162,23 +163,28 @@ export function MarketTab() {
   // ============================================
   // STATE
   // ============================================
-  const [activeChallenges, setActiveChallenges] = useState<Challenge[]>([]);
-  const [votingChallenges, setVotingChallenges] = useState<Challenge[]>([]);
+  const [challenges, setChallenges] = useState<Challenge[]>([]);
+  const [marketStats, setMarketStats] = useState<MarketStats | null>(null);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>('all');
+  const [category, setCategory] = useState<CategoryType>('all');
+  const [page, setPage] = useState(1);
   const [selectedChallenge, setSelectedChallenge] = useState<Challenge | null>(null);
   const [processingBet, setProcessingBet] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [showCategories, setShowCategories] = useState(false);
 
   // ============================================
   // CATEGORY ICONS
   // ============================================
   const categoryIcons: Record<string, string> = {
+    all: '🌟',
     sports: '⚽',
     crypto: '₿',
     entertainment: '🎬',
-    'social-media': '📱',
+    'social network': '📱',
     tech: '💻',
     politics: '🏛️',
     weather: '🌤️',
@@ -187,62 +193,84 @@ export function MarketTab() {
   // ============================================
   // FETCH DATA
   // ============================================
-  const fetchChallenges = async () => {
+  const fetchChallenges = async (pageNum: number = 1, statusFilter?: string) => {
     try {
       setLoading(true);
       setError(null);
 
-      // Fetch active challenges
-      const activeResponse = await fetch(`${API_BASE_URL}/api/live_market`);
-      const activeData = await activeResponse.json();
+      // Build query parameters
+      const params = new URLSearchParams({
+        page: pageNum.toString(),
+        limit: '20',
+        sortBy: 'createdAt',
+        sortOrder: 'desc',
+      });
 
-      // Fetch voting challenges
-      const votingResponse = await fetch(`${API_BASE_URL}/api/voting_challenges`);
-      const votingData = await votingResponse.json();
-
-      if (activeData.success) {
-        const formattedActive = activeData.data.map((c: any) => ({
-          id: c.id || c.Id,
-          title: c.title,
-          category: c.category,
-          description: c.description || c.challengeDetails,
-          winCondition: c.winCondition,
-          creator: c.farcasterUsername || c.creator,
-          totalStaked: c.stakePool?.total || c.totalStaked || 0,
-          yesPercentage: c.stakePool ? 
-            Math.round((c.stakePool.yes / c.stakePool.total) * 100) : 
-            (c.yesPercentage || 50),
-          noPercentage: c.stakePool ? 
-            Math.round((c.stakePool.no / c.stakePool.total) * 100) : 
-            (c.noPercentage || 50),
-          participants: c.participants || 0,
-          status: 'active' as ChallengeStatus,
-          timeRemaining: c.timeRemaining,
-          banner: categoryIcons[c.category] || '🎯',
-          stakePool: c.stakePool,
-        }));
-        setActiveChallenges(formattedActive);
+      // Add username for personalization
+      if (farcasterUsername) {
+        params.append('farcasterUsername', farcasterUsername);
       }
 
-      if (votingData.success) {
-        const formattedVoting = votingData.data.map((c: any) => ({
-          id: c.id || c.Id,
+      // Add category filter
+      if (category !== 'all') {
+        params.append('category', category);
+      }
+
+      // Add status filter
+      if (statusFilter) {
+        params.append('status', statusFilter);
+      } else if (filter === 'active') {
+        params.append('status', 'active');
+      } else if (filter === 'voting') {
+        params.append('status', 'voting');
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/live_market?${params}`);
+      const data = await response.json();
+
+      if (data.success) {
+        // Format challenges
+        const formattedChallenges = data.data.map((c: any) => ({
+          id: c.id,
           title: c.title,
           category: c.category,
-          description: c.description || c.challengeDetails,
+          challengeDetails: c.challengeDetails,
+          description: c.challengeDetails,
           winCondition: c.winCondition,
-          creator: c.farcasterUsername || c.creator,
-          totalStaked: c.stakePool?.total || c.totalStaked || 0,
-          yesPercentage: c.votes?.yesPercentage || 50,
-          noPercentage: c.votes ? (100 - c.votes.yesPercentage) : 50,
-          participants: c.votes?.total || 0,
-          status: 'voting' as ChallengeStatus,
-          votingTimeRemaining: c.votingTimeRemaining,
-          banner: categoryIcons[c.category] || '🗳️',
-          stakePool: c.stakePool,
-          votes: c.votes,
+          creator: c.farcasterUsername,
+          farcasterUsername: c.farcasterUsername,
+          currentStake: c.currentStake || 0,
+          totalStaked: c.currentStake || 0,
+          yesVotes: c.yesVotes || 0,
+          noVotes: c.noVotes || 0,
+          totalVotes: c.totalVotes || 0,
+          yesPercentage: c.yesPercentage || 50,
+          noPercentage: 100 - (c.yesPercentage || 50),
+          participants: c.totalVotes || 0,
+          status: c.status,
+          isActive: c.isActive,
+          timeRemaining: c.timeRemaining,
+          banner: categoryIcons[c.category] || '🎯',
+          startDateTime: c.startDateTime,
+          endDateTime: c.endDateTime,
+          voteEndDateTime: c.voteEndDateTime,
+          socialPlatform: c.socialPlatform,
+          stakeAmount: c.stakeAmount,
         }));
-        setVotingChallenges(formattedVoting);
+
+        setChallenges(formattedChallenges);
+        
+        // Set pagination
+        if (data.pagination) {
+          setPagination(data.pagination);
+        }
+
+        // Set market stats
+        if (data.marketStats) {
+          setMarketStats(data.marketStats);
+        }
+      } else {
+        setError(data.message || 'Failed to fetch challenges');
       }
     } catch (err: any) {
       setError(err.message || 'Failed to fetch challenges');
@@ -253,10 +281,10 @@ export function MarketTab() {
 
   // Initial fetch and refresh every 30 seconds
   useEffect(() => {
-    fetchChallenges();
-    const interval = setInterval(fetchChallenges, 30000);
+    fetchChallenges(page);
+    const interval = setInterval(() => fetchChallenges(page), 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [page, filter, category]);
 
   // ============================================
   // HANDLE BET/VOTE
@@ -273,20 +301,27 @@ export function MarketTab() {
     try {
       const stakeAmount = parseFloat(amount);
       const isFor = side === 'yes';
+      const challengeId = typeof selectedChallenge.id === 'string' 
+        ? parseInt(selectedChallenge.id) 
+        : selectedChallenge.id;
 
-      if (selectedChallenge.status === 'active') {
+      // Determine if this is active staking or voting
+      const isVoting = selectedChallenge.status === 'voting' || 
+                       (selectedChallenge.timeRemaining?.expired && !selectedChallenge.isActive);
+
+      if (!isVoting) {
         // ACTIVE CHALLENGE - Use smart contract stake
-        await handleStake(selectedChallenge.id, isFor, stakeAmount);
-      } else if (selectedChallenge.status === 'voting') {
-        // VOTING CHALLENGE - Use smart contract vote
-        await handleVote(selectedChallenge.id, isFor);
-        
-        // Also update API
-        await submitVoteToAPI(selectedChallenge.id, side, stakeAmount);
+        await handleStake(challengeId, isFor, stakeAmount);
+      } else {
+        // VOTING CHALLENGE - Use smart contract vote + API
+        await handleVote(challengeId, isFor, stakeAmount);
       }
 
+      // Submit vote/stake to API
+      await submitVoteToAPI(challengeId, side, stakeAmount);
+
       // Refresh data
-      await fetchChallenges();
+      await fetchChallenges(page);
       setSelectedChallenge(null);
     } catch (err: any) {
       setError(err.message || 'Transaction failed');
@@ -296,7 +331,7 @@ export function MarketTab() {
   };
 
   // Stake on active challenge
-  const handleStake = async (challengeId: number | string, isFor: boolean, amount: number) => {
+  const handleStake = async (challengeId: number, isFor: boolean, amount: number) => {
     if (!walletAddress || !publicClient || !walletClient) return;
 
     const stakeAmountWei = formatUSDCAmount(amount);
@@ -344,7 +379,7 @@ export function MarketTab() {
   };
 
   // Vote on voting challenge
-  const handleVote = async (challengeId: number | string, voteFor: boolean) => {
+  const handleVote = async (challengeId: number, voteFor: boolean, stakeAmount: number) => {
     if (!walletAddress || !walletClient || !publicClient) return;
 
     // Check if user can vote
@@ -370,14 +405,14 @@ export function MarketTab() {
     await publicClient.waitForTransactionReceipt({ hash });
   };
 
-  // Submit vote to API
-  const submitVoteToAPI = async (challengeId: number | string, vote: 'yes' | 'no', stakeAmount: number) => {
-    const response = await fetch(`${API_BASE_URL}/api/challenge_stake`, {
+  // Submit vote to NEW API endpoint
+  const submitVoteToAPI = async (challengeId: number, vote: 'yes' | 'no', stakeAmount: number) => {
+    const response = await fetch(`${API_BASE_URL}/api/live_market`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        challengeId: typeof challengeId === 'string' ? parseInt(challengeId) : challengeId,
         farcasterUsername,
+        challengeId,
         vote,
         stakeAmount,
       }),
@@ -396,18 +431,24 @@ export function MarketTab() {
   // ============================================
   const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchChallenges();
+    await fetchChallenges(page);
     setTimeout(() => setRefreshing(false), 500);
   };
 
   // ============================================
-  // FILTER CHALLENGES
+  // PAGINATION
   // ============================================
-  const displayedChallenges = (() => {
-    if (filter === 'active') return activeChallenges;
-    if (filter === 'voting') return votingChallenges;
-    return [...activeChallenges, ...votingChallenges];
-  })();
+  const handlePrevPage = () => {
+    if (pagination?.hasPrev) {
+      setPage(page - 1);
+    }
+  };
+
+  const handleNextPage = () => {
+    if (pagination?.hasNext) {
+      setPage(page + 1);
+    }
+  };
 
   // ============================================
   // RENDER
@@ -417,11 +458,18 @@ export function MarketTab() {
       {/* Header */}
       <div className="flex-shrink-0 px-4 pt-4 pb-3">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-3xl font-black text-white uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
-            <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">
-              Live Market
-            </span>
-          </h1>
+          <div>
+            <h1 className="text-3xl font-black text-white uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
+              <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">
+                Live Market
+              </span>
+            </h1>
+            {marketStats && (
+              <p className="text-xs text-gray-400 mt-1">
+                {marketStats.activeChallenges} active • ${marketStats.totalStaked.toLocaleString()} staked
+              </p>
+            )}
+          </div>
           
           {/* Refresh Button */}
           <button
@@ -441,7 +489,7 @@ export function MarketTab() {
         </div>
 
         {/* Filter Tabs */}
-        <div className="flex gap-2">
+        <div className="flex gap-2 mb-3">
           {[
             { id: 'all', label: 'All', icon: '🌟' },
             { id: 'active', label: 'Active', icon: '🔥' },
@@ -449,7 +497,10 @@ export function MarketTab() {
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setFilter(tab.id as FilterType)}
+              onClick={() => {
+                setFilter(tab.id as FilterType);
+                setPage(1);
+              }}
               className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-sm transition-all duration-300 ${
                 filter === tab.id
                   ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white shadow-lg shadow-purple-500/50'
@@ -460,6 +511,49 @@ export function MarketTab() {
               {tab.label}
             </button>
           ))}
+        </div>
+
+        {/* Category Filter */}
+        <div className="relative">
+          <button
+            onClick={() => setShowCategories(!showCategories)}
+            className="w-full flex items-center justify-between bg-black/40 border border-gray-700 rounded-xl px-4 py-2.5 text-white text-sm font-bold"
+          >
+            <span>
+              {categoryIcons[category]} {category === 'all' ? 'All Categories' : category.charAt(0).toUpperCase() + category.slice(1)}
+            </span>
+            <svg className={`w-4 h-4 transition-transform ${showCategories ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {showCategories && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-black/95 border border-gray-700 rounded-xl overflow-hidden z-50 backdrop-blur-lg">
+              {(Object.keys(categoryIcons) as CategoryType[]).map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => {
+                    setCategory(cat);
+                    setShowCategories(false);
+                    setPage(1);
+                  }}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-bold transition-colors ${
+                    category === cat
+                      ? 'bg-[#7C3AED] text-white'
+                      : 'text-gray-400 hover:bg-gray-800'
+                  }`}
+                >
+                  <span className="text-xl">{categoryIcons[cat]}</span>
+                  <span>{cat === 'all' ? 'All Categories' : cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
+                  {marketStats?.categoriesCount[cat] && (
+                    <span className="ml-auto text-xs opacity-70">
+                      {marketStats.categoriesCount[cat]}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -483,7 +577,7 @@ export function MarketTab() {
             <div className="w-16 h-16 border-4 border-[#7C3AED] border-t-transparent rounded-full animate-spin mb-4"></div>
             <p className="text-gray-400 font-medium">Loading challenges...</p>
           </div>
-        ) : displayedChallenges.length === 0 ? (
+        ) : challenges.length === 0 ? (
           // Empty State
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="text-6xl mb-4">📊</div>
@@ -491,20 +585,54 @@ export function MarketTab() {
             <p className="text-gray-400">
               {filter === 'active' ? 'No active challenges at the moment' :
                filter === 'voting' ? 'No challenges in voting period' :
+               category !== 'all' ? `No challenges in ${category} category` :
                'Be the first to create a challenge!'}
             </p>
           </div>
         ) : (
           // Challenges Grid
-          <div className="space-y-3">
-            {displayedChallenges.map((challenge) => (
-              <ChallengeCard
-                key={challenge.id}
-                challenge={challenge}
-                onClick={() => setSelectedChallenge(challenge)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3 mb-4">
+              {challenges.map((challenge) => (
+                <ChallengeCard
+                  key={challenge.id}
+                  challenge={challenge}
+                  onClick={() => setSelectedChallenge(challenge)}
+                />
+              ))}
+            </div>
+
+            {/* Pagination */}
+            {pagination && pagination.totalPages > 1 && (
+              <div className="flex items-center justify-between bg-black/40 border border-gray-700 rounded-xl p-4">
+                <button
+                  onClick={handlePrevPage}
+                  disabled={!pagination.hasPrev}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#7C3AED] text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105 active:scale-95"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Previous
+                </button>
+
+                <div className="text-white text-sm font-bold">
+                  Page {pagination.currentPage} of {pagination.totalPages}
+                </div>
+
+                <button
+                  onClick={handleNextPage}
+                  disabled={!pagination.hasNext}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#7C3AED] text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105 active:scale-95"
+                >
+                  Next
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -516,11 +644,11 @@ export function MarketTab() {
             title: selectedChallenge.title,
             banner: selectedChallenge.banner || '🎯',
             category: selectedChallenge.category,
-            creator: selectedChallenge.creator || 'Unknown',
-            totalStaked: selectedChallenge.totalStaked,
+            creator: selectedChallenge.creator || selectedChallenge.farcasterUsername || 'Unknown',
+            totalStaked: selectedChallenge.currentStake || selectedChallenge.totalStaked || 0,
             yesPercentage: selectedChallenge.yesPercentage,
-            noPercentage: selectedChallenge.noPercentage,
-            participants: selectedChallenge.participants,
+            noPercentage: selectedChallenge.noPercentage || (100 - selectedChallenge.yesPercentage),
+            participants: selectedChallenge.totalVotes || selectedChallenge.participants || 0,
           }}
           onClose={() => setSelectedChallenge(null)}
           onPlaceBet={handlePlaceBet}
@@ -540,8 +668,9 @@ interface ChallengeCardProps {
 }
 
 function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
-  const isVoting = challenge.status === 'voting';
-  const timeDisplay = isVoting ? challenge.votingTimeRemaining : challenge.timeRemaining;
+  const isVoting = challenge.status === 'voting' || 
+                   (challenge.timeRemaining?.expired && !challenge.isActive);
+  const timeDisplay = challenge.timeRemaining;
 
   return (
     <div
@@ -556,9 +685,11 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
         <div className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider ${
           isVoting 
             ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-lg shadow-blue-500/50' 
-            : 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/50'
+            : challenge.isActive
+            ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/50'
+            : 'bg-gradient-to-r from-gray-500 to-gray-600 text-white shadow-lg shadow-gray-500/50'
         }`}>
-          {isVoting ? '🗳️ VOTING' : '🔥 ACTIVE'}
+          {isVoting ? '🗳️ VOTING' : challenge.isActive ? '🔥 ACTIVE' : '⏸️ PENDING'}
         </div>
       </div>
 
@@ -574,7 +705,7 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
               {challenge.category}
             </span>
             <span className="text-gray-500">•</span>
-            <span className="text-gray-400 font-semibold">{challenge.participants} participants</span>
+            <span className="text-gray-400 font-semibold">{challenge.totalVotes || 0} votes</span>
           </div>
         </div>
       </div>
@@ -583,14 +714,14 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
       <div className="grid grid-cols-2 gap-3 mb-3">
         {/* Total Pool */}
         <div className="bg-black/40 border border-purple-500/30 rounded-lg p-2.5">
-          <p className="text-xs text-purple-300/70 mb-0.5">Total Pool</p>
-          <p className="text-xl font-black text-white">${challenge.totalStaked}</p>
+          <p className="text-xs text-purple-300/70 mb-0.5">Total Staked</p>
+          <p className="text-xl font-black text-white">${challenge.currentStake || 0}</p>
         </div>
 
         {/* Time Remaining */}
         <div className="bg-black/40 border border-purple-500/30 rounded-lg p-2.5">
           <p className="text-xs text-purple-300/70 mb-0.5">
-            {isVoting ? 'Voting Ends' : 'Time Left'}
+            {isVoting ? 'Voting Status' : 'Time Left'}
           </p>
           <p className="text-sm font-bold text-white truncate">
             {timeDisplay?.humanReadable || 'N/A'}
@@ -606,7 +737,7 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
         />
         <div className="absolute inset-0 flex items-center justify-between px-3 text-xs font-black">
           <span className="text-white drop-shadow-lg">YES {challenge.yesPercentage}%</span>
-          <span className="text-white drop-shadow-lg">NO {challenge.noPercentage}%</span>
+          <span className="text-white drop-shadow-lg">NO {100 - challenge.yesPercentage}%</span>
         </div>
       </div>
 
