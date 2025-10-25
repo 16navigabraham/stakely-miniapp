@@ -191,6 +191,54 @@ export function MarketTab() {
   };
 
   // ============================================
+  // HELPER FUNCTION: Format Challenge Data
+  // ============================================
+  const formatChallenge = (c: any): Challenge => {
+    // Safe percentage calculation
+    let yesPercentage = 50; // Default
+    if (c.yesPercentage !== undefined && c.yesPercentage !== null) {
+      yesPercentage = c.yesPercentage;
+    } else if (c.totalVotes > 0 && c.yesVotes !== undefined) {
+      yesPercentage = Math.round((c.yesVotes / c.totalVotes) * 100);
+    } else if (c.currentStake > 0) {
+      // If we have stake data but not vote percentages, use that
+      const yesStake = c.yesStake || 0;
+      yesPercentage = Math.round((yesStake / c.currentStake) * 100);
+    }
+
+    // Ensure percentage is valid
+    yesPercentage = Math.max(0, Math.min(100, yesPercentage));
+
+    return {
+      id: c.id || c.Id,
+      title: c.title || 'Untitled Challenge',
+      category: c.category || 'other',
+      challengeDetails: c.challengeDetails || c.description,
+      description: c.challengeDetails || c.description,
+      winCondition: c.winCondition || 'No win condition specified',
+      creator: c.farcasterUsername || c.creator || 'Unknown',
+      farcasterUsername: c.farcasterUsername,
+      currentStake: c.currentStake || c.totalStaked || 0,
+      totalStaked: c.currentStake || c.totalStaked || 0,
+      yesVotes: c.yesVotes || 0,
+      noVotes: c.noVotes || 0,
+      totalVotes: c.totalVotes || 0,
+      yesPercentage: yesPercentage,
+      noPercentage: 100 - yesPercentage,
+      participants: c.totalVotes || c.participants || 0,
+      status: c.status || 'active',
+      isActive: c.isActive !== undefined ? c.isActive : true,
+      timeRemaining: c.timeRemaining,
+      banner: categoryIcons[c.category] || '🎯',
+      startDateTime: c.startDateTime,
+      endDateTime: c.endDateTime,
+      voteEndDateTime: c.voteEndDateTime,
+      socialPlatform: c.socialPlatform,
+      stakeAmount: c.stakeAmount,
+    };
+  };
+
+  // ============================================
   // FETCH DATA
   // ============================================
   const fetchChallenges = async (pageNum: number = 1, statusFilter?: string) => {
@@ -225,54 +273,58 @@ export function MarketTab() {
         params.append('status', 'voting');
       }
 
+      console.log('Fetching challenges with params:', params.toString());
+      
       const response = await fetch(`${API_BASE_URL}/api/live_market?${params}`);
       const data = await response.json();
 
+      console.log('API Response:', data);
+
       if (data.success) {
-        // Format challenges
-        const formattedChallenges = data.data.map((c: any) => ({
-          id: c.id,
-          title: c.title,
-          category: c.category,
-          challengeDetails: c.challengeDetails,
-          description: c.challengeDetails,
-          winCondition: c.winCondition,
-          creator: c.farcasterUsername,
-          farcasterUsername: c.farcasterUsername,
-          currentStake: c.currentStake || 0,
-          totalStaked: c.currentStake || 0,
-          yesVotes: c.yesVotes || 0,
-          noVotes: c.noVotes || 0,
-          totalVotes: c.totalVotes || 0,
-          yesPercentage: c.yesPercentage || 50,
-          noPercentage: 100 - (c.yesPercentage || 50),
-          participants: c.totalVotes || 0,
-          status: c.status,
-          isActive: c.isActive,
-          timeRemaining: c.timeRemaining,
-          banner: categoryIcons[c.category] || '🎯',
-          startDateTime: c.startDateTime,
-          endDateTime: c.endDateTime,
-          voteEndDateTime: c.voteEndDateTime,
-          socialPlatform: c.socialPlatform,
-          stakeAmount: c.stakeAmount,
-        }));
+        // Check if we have data
+        if (!data.data || !Array.isArray(data.data)) {
+          console.warn('No data array in response:', data);
+          setChallenges([]);
+          setError('No challenges available');
+          return;
+        }
+
+        // Format challenges with safe data handling
+        const formattedChallenges = data.data.map((c: any) => {
+          try {
+            return formatChallenge(c);
+          } catch (err) {
+            console.error('Error formatting challenge:', c, err);
+            return null;
+          }
+        }).filter(Boolean); // Remove any null entries
+
+        console.log('Formatted challenges:', formattedChallenges);
 
         setChallenges(formattedChallenges);
         
         // Set pagination
         if (data.pagination) {
           setPagination(data.pagination);
+          console.log('Pagination:', data.pagination);
         }
 
         // Set market stats
         if (data.marketStats) {
           setMarketStats(data.marketStats);
+          console.log('Market Stats:', data.marketStats);
+        }
+
+        // If no challenges but we have stats showing there should be some
+        if (formattedChallenges.length === 0 && data.marketStats?.totalChallenges > 0) {
+          setError('Challenges exist but could not be loaded. Try a different filter.');
         }
       } else {
+        console.error('API returned error:', data);
         setError(data.message || 'Failed to fetch challenges');
       }
     } catch (err: any) {
+      console.error('Fetch error:', err);
       setError(err.message || 'Failed to fetch challenges');
     } finally {
       setLoading(false);
@@ -324,6 +376,7 @@ export function MarketTab() {
       await fetchChallenges(page);
       setSelectedChallenge(null);
     } catch (err: any) {
+      console.error('Bet/Vote error:', err);
       setError(err.message || 'Transaction failed');
     } finally {
       setProcessingBet(false);
@@ -545,7 +598,7 @@ export function MarketTab() {
                 >
                   <span className="text-xl">{categoryIcons[cat]}</span>
                   <span>{cat === 'all' ? 'All Categories' : cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
-                  {marketStats?.categoriesCount[cat] && (
+                  {marketStats?.categoriesCount?.[cat] && (
                     <span className="ml-auto text-xs opacity-70">
                       {marketStats.categoriesCount[cat]}
                     </span>
@@ -569,6 +622,15 @@ export function MarketTab() {
         </div>
       )}
 
+      {/* Debug Info - Remove in production */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="mx-4 mb-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 text-xs text-yellow-200">
+          <p>Challenges loaded: {challenges.length}</p>
+          <p>Filter: {filter} | Category: {category} | Page: {page}</p>
+          {marketStats && <p>Total in DB: {marketStats.totalChallenges} | Active: {marketStats.activeChallenges}</p>}
+        </div>
+      )}
+
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         {loading ? (
@@ -579,15 +641,27 @@ export function MarketTab() {
           </div>
         ) : challenges.length === 0 ? (
           // Empty State
-          <div className="flex flex-col items-center justify-center h-full text-center">
+          <div className="flex flex-col items-center justify-center h-full text-center px-4">
             <div className="text-6xl mb-4">📊</div>
             <h3 className="text-xl font-bold text-white mb-2">No Challenges Found</h3>
-            <p className="text-gray-400">
+            <p className="text-gray-400 mb-4">
               {filter === 'active' ? 'No active challenges at the moment' :
                filter === 'voting' ? 'No challenges in voting period' :
                category !== 'all' ? `No challenges in ${category} category` :
                'Be the first to create a challenge!'}
             </p>
+            {marketStats && marketStats.totalChallenges > 0 && (
+              <button
+                onClick={() => {
+                  setFilter('all');
+                  setCategory('all');
+                  setPage(1);
+                }}
+                className="px-4 py-2 bg-[#7C3AED] text-white rounded-lg font-bold text-sm hover:scale-105 transition-transform"
+              >
+                Show All Challenges
+              </button>
+            )}
           </div>
         ) : (
           // Challenges Grid
@@ -697,15 +771,21 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
       <div className="flex items-start gap-3 mb-3">
         <div className="text-4xl flex-shrink-0">{challenge.banner}</div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-black text-white mb-1 leading-tight truncate">
+          <h3 className="text-lg font-black text-white mb-1 leading-tight">
             {challenge.title}
           </h3>
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-2 text-xs flex-wrap">
             <span className="px-2 py-0.5 bg-purple-500/20 border border-purple-500/40 rounded-full text-purple-300 font-bold">
               {challenge.category}
             </span>
             <span className="text-gray-500">•</span>
-            <span className="text-gray-400 font-semibold">{challenge.totalVotes || 0} votes</span>
+            <span className="text-gray-400 font-semibold">{challenge.totalVotes} votes</span>
+            {challenge.creator && challenge.creator !== 'Unknown' && (
+              <>
+                <span className="text-gray-500">•</span>
+                <span className="text-gray-400 text-xs">by @{challenge.creator}</span>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -721,7 +801,7 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
         {/* Time Remaining */}
         <div className="bg-black/40 border border-purple-500/30 rounded-lg p-2.5">
           <p className="text-xs text-purple-300/70 mb-0.5">
-            {isVoting ? 'Voting Status' : 'Time Left'}
+            {isVoting ? 'Voting' : 'Time Left'}
           </p>
           <p className="text-sm font-bold text-white truncate">
             {timeDisplay?.humanReadable || 'N/A'}
