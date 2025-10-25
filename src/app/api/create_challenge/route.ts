@@ -1,5 +1,5 @@
-// pages/api/create_challenge.ts (or app/api/create_challenge/route.ts for App Router)
-import type { NextApiRequest, NextApiResponse } from 'next';
+// app/api/create_challenge/route.ts (App Router)
+import { NextRequest, NextResponse } from 'next/server';
 import { NeynarAPIClient, Configuration } from '@neynar/nodejs-sdk';
 
 // ============================================
@@ -29,7 +29,7 @@ interface CreateChallengeRequest {
   Id: string;
   onchainChallengeId: number;
   txHash: string;
-  votingDeadline: string; // ISO string
+  votingDeadline?: string; // ISO string
 }
 
 interface CreateChallengeResponse {
@@ -122,32 +122,24 @@ function validateRequest(body: any): string[] {
 }
 
 // ============================================
-// MAIN HANDLER
+// MAIN HANDLER (App Router)
 // ============================================
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<CreateChallengeResponse>
-) {
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({
-      success: false,
-      message: 'Method not allowed',
-    });
-  }
-
+export async function POST(req: NextRequest) {
   try {
-    const body: CreateChallengeRequest = req.body;
+    const body: CreateChallengeRequest = await req.json();
 
     // Validate request
     const validationErrors = validateRequest(body);
     if (validationErrors.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: validationErrors,
-      });
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'Validation failed',
+          errors: validationErrors,
+        } as CreateChallengeResponse,
+        { status: 400 }
+      );
     }
 
     // Parse dates
@@ -234,7 +226,7 @@ export default async function handler(
         const neynarConfig = new Configuration({
           apiKey: process.env.NEYNAR_API_KEY,
         });
-        const neynarClient = new NeynarAPIClient(neynarConfig);
+        const _neynarClient = new NeynarAPIClient(neynarConfig);
 
         // Example: Get user data
         // const userData = await neynarClient.lookupUserByUsername(body.farcasterUsername);
@@ -245,8 +237,8 @@ export default async function handler(
         //   embeds: [{ url: `https://yourapp.com/challenge/${body.onchainChallengeId}` }]
         // });
         
-      } catch (neynarError) {
-        console.error('Neynar error:', neynarError);
+      } catch (_neynarError) {
+        console.error('Neynar error:', _neynarError);
         // Don't fail the whole request if Neynar fails
       }
     }
@@ -255,27 +247,33 @@ export default async function handler(
     // RETURN SUCCESS RESPONSE
     // ============================================
 
-    return res.status(201).json({
-      success: true,
-      data: {
-        id: challengeData.id,
-        onchainChallengeId: challengeData.onchainChallengeId,
-        title: challengeData.title,
-        status: challengeData.status,
-        votingDeadline: challengeData.votingDeadline,
-        createdAt: challengeData.createdAt,
-        txHash: challengeData.txHash,
-      },
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          id: challengeData.id,
+          onchainChallengeId: challengeData.onchainChallengeId,
+          title: challengeData.title,
+          status: challengeData.status,
+          votingDeadline: challengeData.votingDeadline,
+          createdAt: challengeData.createdAt,
+          txHash: challengeData.txHash,
+        },
+      } as CreateChallengeResponse,
+      { status: 201 }
+    );
 
   } catch (error: any) {
     console.error('❌ Error creating challenge:', error);
     
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error',
-      errors: [error.message || 'Unknown error occurred'],
-    });
+    return NextResponse.json(
+      {
+        success: false,
+        message: 'Internal server error',
+        errors: [error.message || 'Unknown error occurred'],
+      } as CreateChallengeResponse,
+      { status: 500 }
+    );
   }
 }
 

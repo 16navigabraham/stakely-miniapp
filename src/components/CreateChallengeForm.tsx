@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useCreateChallenge, STEP_MESSAGES, type CreateChallengeFormData } from '~/hooks/useCreateChallenge';
-import { getApprovalStrategy, doesChainUSDCSupportPermit } from '~/utils/permit';
+import { doesChainUSDCSupportPermit } from '~/utils/permit';
 
 // ============================================
 // TYPES
@@ -41,8 +41,6 @@ export function CreateChallengeForm({
     error,
     step,
     onchainData,
-    apiResponse,
-    supportsPermit,
     reset,
   } = useCreateChallenge(provider, signer, contractAddress, usdcAddress, apiBaseUrl);
 
@@ -243,7 +241,7 @@ export function CreateChallengeForm({
               <>
                 <span className="font-semibold">✅ Single-transaction creation enabled!</span>
                 <br />
-                <span className="text-xs">Your chain supports EIP-2612 Permit. You'll only need to sign once.</span>
+                <span className="text-xs">Your chain supports EIP-2612 Permit. You&apos;ll only need to sign once.</span>
               </>
             ) : (
               <>
