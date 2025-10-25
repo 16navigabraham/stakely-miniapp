@@ -1,5 +1,6 @@
-// utils/permit.ts
-import { type Address, type Hash, type PublicClient, type WalletClient, parseUnits, formatUnits } from 'viem';
+// utils/permit-wagmi.ts
+import { type Address, type Hash, parseUnits, formatUnits } from 'viem';
+import type { PublicClient, WalletClient } from 'viem';
 
 export interface PermitSignature {
   v: number;
@@ -7,6 +8,10 @@ export interface PermitSignature {
   s: Hash;
   deadline: number;
 }
+
+// ============================================
+// PERMIT SUPPORT CHECK
+// ============================================
 
 /**
  * Check if a token supports EIP-2612 permit
@@ -34,6 +39,10 @@ export async function supportsPermit(
     return false;
   }
 }
+
+// ============================================
+// DOMAIN HELPERS
+// ============================================
 
 /**
  * Get the permit domain for a token
@@ -83,7 +92,6 @@ async function getPermitDomain(
     });
   } catch {
     // USDC v2 on Base/Arbitrum/Optimism uses version '2'
-    // Check by trying to call a v2-specific function
     try {
       await publicClient.readContract({
         address: tokenAddress,
@@ -112,8 +120,14 @@ async function getPermitDomain(
   };
 }
 
+// ============================================
+// MAIN PERMIT SIGNING FUNCTION
+// ============================================
+
 /**
- * Sign an EIP-2612 permit message
+ * Sign an EIP-2612 permit message using Wagmi
+ * Works with any Wagmi-compatible wallet including Farcaster wallets
+ * 
  * @param tokenAddress - Address of the ERC20 token
  * @param userAddress - Address of the token owner
  * @param spenderAddress - Address that will be approved to spend tokens
@@ -181,7 +195,7 @@ export async function signPermit(
   };
 
   try {
-    // Sign typed data
+    // Sign typed data with Wagmi wallet client
     const signature = await walletClient.signTypedData({
       account: userAddress,
       domain: {
@@ -202,15 +216,28 @@ export async function signPermit(
 
     return { v, r, s, deadline };
   } catch (error: any) {
-    if (error.message?.includes('rejected') || error.message?.includes('denied')) {
+    // Handle user rejection gracefully
+    if (error.message?.includes('rejected') || 
+        error.message?.includes('denied') ||
+        error.message?.includes('User rejected')) {
       throw new Error('User rejected signature request');
     }
+    
+    // Handle wallet-specific errors
+    if (error.code === 4001 || error.code === 'ACTION_REJECTED') {
+      throw new Error('User rejected signature request');
+    }
+    
     throw error;
   }
 }
 
+// ============================================
+// CHAIN-SPECIFIC HELPERS
+// ============================================
+
 /**
- * Helper to get USDC address for different chains
+ * USDC addresses for different chains
  */
 export const USDC_ADDRESSES: Record<number, Address> = {
   1: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // Ethereum Mainnet (no permit)
@@ -239,6 +266,10 @@ export function getApprovalStrategy(chainId: number): 'permit' | 'approval' | 'm
   return 'max-approval';
 }
 
+// ============================================
+// AMOUNT FORMATTING HELPERS
+// ============================================
+
 /**
  * Format amount for USDC (6 decimals)
  */
@@ -247,30 +278,122 @@ export function formatUSDCAmount(amount: string | number): bigint {
 }
 
 /**
- * Parse USDC amount from wei
+ * Parse USDC amount from wei to human-readable
  */
 export function parseUSDCAmount(amountWei: bigint): string {
   return formatUnits(amountWei, 6);
 }
 
-// Example usage:
+// ============================================
+// WAGMI HOOK VERSION
+// ============================================
+
+import { usePublicClient, useWalletClient, useAccount } from 'wagmi';
+import { useCallback, useState } from 'react';
+
+/**
+ * React hook for signing permits with Wagmi
+ * Integrates seamlessly with Farcaster wallets and any Wagmi connector
+ */
+export function usePermitSigner(tokenAddress: Address, spenderAddress: Address) {
+  const { address } = useAccount();
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
+
+  const [isSigning, setIsSigning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const signPermitAsync = useCallback(
+    async (amount: bigint, deadlineOffset?: number): Promise<PermitSignature> => {
+      if (!address || !publicClient || !walletClient) {
+        throw new Error('Wallet not connected');
+      }
+
+      setIsSigning(true);
+      setError(null);
+
+      try {
+        const signature = await signPermit(
+          tokenAddress,
+          address,
+          spenderAddress,
+          amount,
+          publicClient,
+          walletClient,
+          deadlineOffset
+        );
+
+        setIsSigning(false);
+        return signature;
+      } catch (err: any) {
+        const errorMessage = err.message || 'Failed to sign permit';
+        setError(errorMessage);
+        setIsSigning(false);
+        throw err;
+      }
+    },
+    [address, publicClient, walletClient, tokenAddress, spenderAddress]
+  );
+
+  const checkPermitSupport = useCallback(async (): Promise<boolean> => {
+    if (!publicClient) return false;
+    return supportsPermit(tokenAddress, publicClient);
+  }, [publicClient, tokenAddress]);
+
+  return {
+    signPermitAsync,
+    checkPermitSupport,
+    isSigning,
+    error,
+  };
+}
+
+// ============================================
+// EXAMPLE USAGE WITH FARCASTER
+// ============================================
+
 /*
-import { signPermit, formatUSDCAmount, getApprovalStrategy } from './utils/permit';
+// In your component:
+import { usePermitSigner, formatUSDCAmount } from '~/utils/permit-wagmi';
+import { useFarcasterAuth } from '~/hooks/useFarcasterAuth';
 
-// Check strategy
-const strategy = getApprovalStrategy(chainId);
-console.log(`Use ${strategy} for this chain`);
+function MyComponent() {
+  const { farcasterUser, isFullyAuthenticated } = useFarcasterAuth('YOUR_NEYNAR_API_KEY');
+  const { signPermitAsync, isSigning, error } = usePermitSigner(
+    usdcAddress,
+    contractAddress
+  );
 
-// Sign permit
-const amount = formatUSDCAmount(100); // 100 USDC
-const signature = await signPermit(
-  usdcAddress,
-  userAddress,
-  contractAddress,
-  amount,
-  publicClient,
-  walletClient
-);
+  const handleCreateChallenge = async () => {
+    if (!isFullyAuthenticated) {
+      alert('Please connect wallet and authenticate with Farcaster');
+      return;
+    }
 
-console.log('Permit signature:', signature);
+    try {
+      // Sign permit
+      const amount = formatUSDCAmount(100); // 100 USDC
+      const permitSig = await signPermitAsync(amount);
+      
+      // Use permit signature in contract call
+      console.log('Permit signature:', permitSig);
+      
+      // Call contract with permit
+      // ... your contract interaction
+      
+    } catch (err) {
+      console.error('Failed:', err);
+    }
+  };
+
+  return (
+    <div>
+      <p>Farcaster: {farcasterUser?.username || 'Not connected'}</p>
+      <button onClick={handleCreateChallenge} disabled={isSigning}>
+        {isSigning ? 'Signing...' : 'Create Challenge'}
+      </button>
+      {error && <p style={{ color: 'red' }}>{error}</p>}
+    </div>
+  );
+}
 */
