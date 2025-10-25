@@ -1,951 +1,728 @@
 // components/ui/tabs/CreateTab.tsx
 "use client";
-import { useState, useEffect } from 'react';
-import { BrowserProvider } from 'ethers';
-import { TimePicker } from '../TimePicker';
-import { useCreateChallenge } from '~/hooks/useCreateChallenge';
-import { useMiniApp } from '@neynar/react';
-import { useNeynarUser } from '~/hooks/useNeynarUser';
-import { getNeynarUsername, getNeynarWalletAddress } from '~/lib/neynarUtils';
+import { useState } from "react";
+import { usePublicClient, useWalletClient } from "wagmi";
+import { type Address } from "viem";
+import { signPermit, formatUSDCAmount, USDC_ADDRESSES } from "~/utils/permit-wagmi";
+import { getNeynarUsername, getNeynarFid, getNeynarPfpUrl } from "~/lib/neynarUtils";
 
-// ============================================
-// CONFIGURATION
-// ============================================
+// Contract addresses - from environment
+const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_GRINDARENA_CONTRACT as Address;
+const CHAIN_ID = 8453; // Base
+const USDC_ADDRESS = USDC_ADDRESSES[CHAIN_ID];
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
-const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x4b637CBe4B1A94CdcDE05c8BACC8C74813273CDf';
-const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://stakely-backend.onrender.com';
-
-// ============================================
-// TYPES
-// ============================================
-
-interface Category {
-  id: string;
-  label: string;
-  icon: string;
+interface CreateTabProps {
+  neynarUser: any;
+  walletAddress?: Address;
+  isWalletConnected: boolean;
 }
 
-// ============================================
-// CONSTANTS
-// ============================================
+type CreateStep = 
+  | 'idle'
+  | 'uploading_banner'
+  | 'checking_permit'
+  | 'signing_permit'
+  | 'creating'
+  | 'waiting_confirmation'
+  | 'saving_to_api'
+  | 'success'
+  | 'error';
 
-const CATEGORIES: Category[] = [
-  { id: 'sports', label: 'Sports', icon: '⚽' },
-  { id: 'entertainment', label: 'Entertainment', icon: '🎬' },
-  { id: 'social-media', label: 'Social Media', icon: '📱' },
-  { id: 'crypto', label: 'Crypto', icon: '₿' },
-  { id: 'politics', label: 'Politics', icon: '🏛️' },
-  { id: 'tech', label: 'Tech', icon: '💻' },
+const STEP_MESSAGES: Record<CreateStep, string> = {
+  idle: '',
+  uploading_banner: '📸 Processing banner...',
+  checking_permit: '🔍 Checking permit support...',
+  signing_permit: '📝 Sign in your wallet...',
+  creating: '⚡ Creating on blockchain...',
+  waiting_confirmation: '⏳ Confirming transaction...',
+  saving_to_api: '💾 Saving to database...',
+  success: '✅ Challenge created!',
+  error: '❌ Something went wrong',
+};
+
+const CATEGORIES = [
+  { id: 'fitness', label: 'Fitness', icon: '💪' },
+  { id: 'learning', label: 'Learning', icon: '📚' },
+  { id: 'productivity', label: 'Productivity', icon: '⚡' },
+  { id: 'health', label: 'Health', icon: '🏥' },
+  { id: 'creative', label: 'Creative', icon: '🎨' },
+  { id: 'other', label: 'Other', icon: '🎯' },
 ];
 
-const SOCIAL_PLATFORMS = [
-  { id: 'twitter', label: 'X', icon: '𝕏' },
-  { id: 'telegram', label: 'Telegram', icon: '✈️' },
-  { id: 'instagram', label: 'Instagram', icon: '📸' },
-  { id: 'youtube', label: 'YouTube', icon: '▶️' },
-  { id: 'tiktok', label: 'TikTok', icon: '🎵' },
-  { id: 'discord', label: 'Discord', icon: '💬' },
-];
+export function CreateTab({ neynarUser, walletAddress, isWalletConnected }: CreateTabProps) {
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
 
-const STAKE_PRESETS = [10, 25, 50, 100, 250, 500];
+  // Form state
+  const [formData, setFormData] = useState({
+    title: '',
+    category: 'fitness',
+    description: '',
+    winCondition: '',
+    startDate: '',
+    startTime: '00:00:00',
+    endDate: '',
+    endTime: '23:59:59',
+    stakeAmount: 10,
+    votingDurationHours: 24,
+  });
 
-// ============================================
-// MAIN COMPONENT
-// ============================================
+  const [banner, setBanner] = useState<{
+    file: File | null;
+    preview: string | null;
+    data: string | null;
+  }>({
+    file: null,
+    preview: null,
+    data: null,
+  });
 
-export function CreateTab() {
-  // ============================================
-  // NEYNAR CONTEXT & USER
-  // ============================================
-  const { context } = useMiniApp();
-  const { user: neynarUser } = useNeynarUser(context || undefined);
-  
-  const farcasterUsername = getNeynarUsername(neynarUser) || '';
-  const farcasterWalletAddress = getNeynarWalletAddress(neynarUser);
-  
-  // ============================================
-  // WALLET STATE
-  // ============================================
-  const [provider, setProvider] = useState<BrowserProvider | null>(null);
-  const [signer, setSigner] = useState<any>(null);
-  const [walletConnecting, setWalletConnecting] = useState(false);
-  const [walletError, setWalletError] = useState<string | null>(null);
-  const [needsWalletPrompt, setNeedsWalletPrompt] = useState(false);
+  // Transaction state
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<CreateStep>('idle');
+  const [txHash, setTxHash] = useState<string | null>(null);
+  const [challengeId, setChallengeId] = useState<number | null>(null);
 
-  // ============================================
-  // FORM STATE
-  // ============================================
-  const [step, setStep] = useState(1);
-  const [bannerImage, setBannerImage] = useState<string | null>(null);
-  const [bannerFile, setBannerFile] = useState<File | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  
-  const [challengeTitle, setChallengeTitle] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
-  const [description, setDescription] = useState('');
-  const [winCondition, setWinCondition] = useState('');
-  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
-  const [startDate, setStartDate] = useState('');
-  const [startTime, setStartTime] = useState({ hours: '12', minutes: '00', seconds: '00' });
-  const [endDate, setEndDate] = useState('');
-  const [endTime, setEndTime] = useState({ hours: '12', minutes: '00', seconds: '00' });
-  const [stakeAmount, setStakeAmount] = useState(50);
-  const [customStake, setCustomStake] = useState('');
-  const [votingDurationHours, setVotingDurationHours] = useState(24);
-  
-  const [timeRemaining, setTimeRemaining] = useState('');
+  // Handle form input
+  const handleChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: name === 'stakeAmount' || name === 'votingDurationHours' 
+        ? Number(value) 
+        : value,
+    }));
+  };
 
-  const today = new Date().toISOString().split('T')[0];
+  // Handle banner upload
+  const handleBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  // ============================================
-  // BLOCKCHAIN INTEGRATION
-  // ============================================
-  
-  const {
-    createChallenge,
-    loading: isCreating,
-    error: createError,
-    step: createStep,
-    onchainData,
-    reset: resetCreate,
-  } = useCreateChallenge(provider, signer, CONTRACT_ADDRESS, USDC_ADDRESS, API_BASE_URL);
+    // Validate file type
+    if (!file.type.match(/image\/(jpeg|jpg|png)/)) {
+      setError('Banner must be JPEG or PNG');
+      return;
+    }
 
-  // ============================================
-  // WALLET CONNECTION WITH NEYNAR
-  // ============================================
+    // Validate file size (max 5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Banner must be less than 5MB');
+      return;
+    }
 
-  const requestWalletConnection = async () => {
-    try {
-      setWalletConnecting(true);
-      setWalletError(null);
-      setNeedsWalletPrompt(false);
+    setError(null);
+    setStep('uploading_banner');
 
-      console.log('🔌 Requesting Farcaster wallet connection...');
+    // Create preview
+    const preview = URL.createObjectURL(file);
 
-      // Check if window.ethereum is available
-      if (!window.ethereum) {
-        throw new Error('No Ethereum provider found. Please ensure you are using the Farcaster app.');
-      }
-
-      // Request accounts (this will prompt the user if not already connected)
-      const accounts = await window.ethereum.request({ 
-        method: 'eth_requestAccounts' 
+    // Convert to base64
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = reader.result as string;
+      setBanner({
+        file,
+        preview,
+        data: base64.split(',')[1], // Remove data:image/...;base64, prefix
       });
+      setStep('idle');
+    };
+    reader.readAsDataURL(file);
+  };
 
-      if (!accounts || accounts.length === 0) {
-        throw new Error('No accounts found. Please connect your wallet.');
-      }
+  // Parse date/time to Unix timestamp
+  const parseDateTime = (date: string, time: string): number => {
+    const [day, month, year] = date.split('/').map(Number);
+    const [hours, minutes, seconds] = time.split(':').map(Number);
+    return Math.floor(new Date(year, month - 1, day, hours, minutes, seconds).getTime() / 1000);
+  };
 
-      // Create ethers provider and signer
-      const provider = new BrowserProvider(window.ethereum);
-      const signer = await provider.getSigner();
-      const address = await signer.getAddress();
-
-      setProvider(provider);
-      setSigner(signer);
-      setWalletConnecting(false);
-
-      console.log('✅ Farcaster wallet connected:', address);
-      
+  // Check permit support
+  const checkPermitSupport = async (): Promise<boolean> => {
+    if (!publicClient) return false;
+    try {
+      await publicClient.readContract({
+        address: USDC_ADDRESS,
+        abi: [{
+          name: 'DOMAIN_SEPARATOR',
+          type: 'function',
+          stateMutability: 'view',
+          inputs: [],
+          outputs: [{ name: '', type: 'bytes32' }],
+        }],
+        functionName: 'DOMAIN_SEPARATOR',
+      });
       return true;
-    } catch (error: any) {
-      console.error('❌ Wallet connection error:', error);
-      
-      // Handle user rejection
-      if (error.code === 4001 || error.code === 'ACTION_REJECTED') {
-        setWalletError('Connection rejected. Please approve the connection to continue.');
-      } else {
-        setWalletError(error.message || 'Failed to connect Farcaster wallet');
-      }
-      
-      setWalletConnecting(false);
-      setNeedsWalletPrompt(true);
+    } catch {
       return false;
     }
   };
 
-  // Auto-connect wallet when component mounts
-  useEffect(() => {
-    const setupWallet = async () => {
-      // Check if we have Farcaster user data
-      if (!farcasterWalletAddress) {
-        console.log('⏳ Waiting for Farcaster user data...');
-        return;
-      }
+  // Create with permit (1 tx)
+  const createWithPermit = async () => {
+    if (!walletAddress || !publicClient || !walletClient) {
+      throw new Error('Wallet not connected');
+    }
 
-      // Check if window.ethereum is available (Farcaster wallet injected)
-      if (!window.ethereum) {
-        console.log('❌ No ethereum provider, will prompt connection');
-        setNeedsWalletPrompt(true);
-        return;
-      }
+    const stakeAmountWei = formatUSDCAmount(formData.stakeAmount);
+    const deadline = parseDateTime(formData.endDate, formData.endTime);
+    const votingDurationSeconds = formData.votingDurationHours * 3600;
 
-      setWalletConnecting(true);
+    // Check balance
+    const balance = await publicClient.readContract({
+      address: USDC_ADDRESS,
+      abi: [{
+        name: 'balanceOf',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [{ name: 'account', type: 'address' }],
+        outputs: [{ name: '', type: 'uint256' }],
+      }],
+      functionName: 'balanceOf',
+      args: [walletAddress],
+    });
 
-      try {
-        console.log('🔌 Auto-connecting to Farcaster wallet...');
-        
-        // Try to get accounts without prompting (if already connected)
-        const accounts = await window.ethereum.request({ 
-          method: 'eth_accounts' 
-        });
+    if (balance < stakeAmountWei) {
+      throw new Error(`Insufficient USDC. Need ${formData.stakeAmount} USDC`);
+    }
 
-        if (!accounts || accounts.length === 0) {
-          console.log('⚠️ No accounts found, will prompt connection');
-          setWalletConnecting(false);
-          setNeedsWalletPrompt(true);
-          return;
-        }
-        
-        // Try to connect to already injected wallet
-        const provider = new BrowserProvider(window.ethereum);
-        const signer = await provider.getSigner();
-        const address = await signer.getAddress();
-        
-        setProvider(provider);
-        setSigner(signer);
-        setWalletConnecting(false);
-        
-        console.log('✅ Wallet auto-connected:', address);
-      } catch (error: any) {
-        console.log('⚠️ Auto-connect failed, will prompt user:', error.message);
-        setWalletConnecting(false);
-        setNeedsWalletPrompt(true);
-      }
+    // Sign permit
+    setStep('signing_permit');
+    const permitSig = await signPermit(
+      USDC_ADDRESS,
+      walletAddress,
+      CONTRACT_ADDRESS,
+      stakeAmountWei,
+      publicClient,
+      walletClient
+    );
+
+    // Create challenge
+    setStep('creating');
+    const hash = await walletClient.writeContract({
+      address: CONTRACT_ADDRESS,
+      abi: [{
+        name: 'createChallengeWithPermit',
+        type: 'function',
+        stateMutability: 'nonpayable',
+        inputs: [
+          { name: 'description', type: 'string' },
+          { name: 'deadline', type: 'uint256' },
+          { name: 'votingDuration', type: 'uint256' },
+          { name: 'amount', type: 'uint256' },
+          { name: 'permitDeadline', type: 'uint256' },
+          { name: 'v', type: 'uint8' },
+          { name: 'r', type: 'bytes32' },
+          { name: 's', type: 'bytes32' },
+        ],
+        outputs: [],
+      }],
+      functionName: 'createChallengeWithPermit',
+      args: [
+        formData.description,
+        BigInt(deadline),
+        BigInt(votingDurationSeconds),
+        stakeAmountWei,
+        BigInt(permitSig.deadline),
+        permitSig.v,
+        permitSig.r,
+        permitSig.s,
+      ],
+    });
+
+    setTxHash(hash);
+    setStep('waiting_confirmation');
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    const challengeIdFromLogs = Number(receipt.logs[0]?.topics[1] || '0');
+    setChallengeId(challengeIdFromLogs);
+
+    return { hash, challengeId: challengeIdFromLogs };
+  };
+
+  // Create with approval (2 txs)
+  const createWithApproval = async () => {
+    if (!walletAddress || !publicClient || !walletClient) {
+      throw new Error('Wallet not connected');
+    }
+
+    const stakeAmountWei = formatUSDCAmount(formData.stakeAmount);
+    const deadline = parseDateTime(formData.endDate, formData.endTime);
+    const votingDurationSeconds = formData.votingDurationHours * 3600;
+
+    // Check allowance
+    const currentAllowance = await publicClient.readContract({
+      address: USDC_ADDRESS,
+      abi: [{
+        name: 'allowance',
+        type: 'function',
+        stateMutability: 'view',
+        inputs: [
+          { name: 'owner', type: 'address' },
+          { name: 'spender', type: 'address' },
+        ],
+        outputs: [{ name: '', type: 'uint256' }],
+      }],
+      functionName: 'allowance',
+      args: [walletAddress, CONTRACT_ADDRESS],
+    });
+
+    // Approve if needed
+    if (currentAllowance < stakeAmountWei) {
+      setStep('signing_permit');
+      const approveHash = await walletClient.writeContract({
+        address: USDC_ADDRESS,
+        abi: [{
+          name: 'approve',
+          type: 'function',
+          stateMutability: 'nonpayable',
+          inputs: [
+            { name: 'spender', type: 'address' },
+            { name: 'amount', type: 'uint256' },
+          ],
+          outputs: [{ name: '', type: 'bool' }],
+        }],
+        functionName: 'approve',
+        args: [CONTRACT_ADDRESS, stakeAmountWei],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    }
+
+    // Create challenge
+    setStep('creating');
+    const hash = await walletClient.writeContract({
+      address: CONTRACT_ADDRESS,
+      abi: [{
+        name: 'createChallenge',
+        type: 'function',
+        stateMutability: 'nonpayable',
+        inputs: [
+          { name: 'description', type: 'string' },
+          { name: 'deadline', type: 'uint256' },
+          { name: 'votingDuration', type: 'uint256' },
+          { name: 'amount', type: 'uint256' },
+        ],
+        outputs: [],
+      }],
+      functionName: 'createChallenge',
+      args: [
+        formData.description,
+        BigInt(deadline),
+        BigInt(votingDurationSeconds),
+        stakeAmountWei,
+      ],
+    });
+
+    setTxHash(hash);
+    setStep('waiting_confirmation');
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    const challengeIdFromLogs = Number(receipt.logs[0]?.topics[1] || '0');
+    setChallengeId(challengeIdFromLogs);
+
+    return { hash, challengeId: challengeIdFromLogs };
+  };
+
+  // Save to backend
+  const saveToBackend = async (onchainData: { hash: string; challengeId: number }) => {
+    setStep('saving_to_api');
+
+    if (!banner.data) {
+      throw new Error('Banner is required');
+    }
+
+    const farcasterUsername = getNeynarUsername(neynarUser);
+    const farcasterFid = getNeynarFid(neynarUser);
+    const farcasterPfpUrl = getNeynarPfpUrl(neynarUser);
+
+    const endDateTime = parseDateTime(formData.endDate, formData.endTime);
+    const votingDeadlineMs = endDateTime * 1000 + formData.votingDurationHours * 3600000;
+
+    const payload = {
+      ...formData,
+      Id: `${walletAddress?.toLowerCase()}_challenge${onchainData.challengeId}`,
+      onchainChallengeId: onchainData.challengeId,
+      txHash: onchainData.hash,
+      votingDeadline: new Date(votingDeadlineMs).toISOString(),
+      farcasterUsername,
+      farcasterFid,
+      farcasterPfpUrl,
+      farcasterWalletAddress: walletAddress,
+      banner: {
+        filename: banner.file?.name || 'banner.jpg',
+        contentType: banner.file?.type || 'image/jpeg',
+        data: banner.data,
+      },
     };
 
-    // Give Farcaster wallet a moment to inject
-    const timer = setTimeout(setupWallet, 500);
-    return () => clearTimeout(timer);
-  }, [farcasterWalletAddress]);
-
-  // Manual retry function
-  const retryWalletConnection = async () => {
-    await requestWalletConnection();
-  };
-
-  // ============================================
-  // HELPER FUNCTIONS
-  // ============================================
-
-  // Calculate duration
-  useEffect(() => {
-    if (startDate && endDate) {
-      const start = new Date(`${startDate}T${startTime.hours}:${startTime.minutes}:${startTime.seconds}`);
-      const end = new Date(`${endDate}T${endTime.hours}:${endTime.minutes}:${endTime.seconds}`);
-      const diff = end.getTime() - start.getTime();
-      
-      if (diff > 0) {
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        const secs = Math.floor((diff % (1000 * 60)) / 1000);
-        
-        let timeStr = '';
-        if (days > 0) timeStr += `${days}d `;
-        if (hours > 0) timeStr += `${hours}h `;
-        if (mins > 0) timeStr += `${mins}m `;
-        timeStr += `${secs}s`;
-        setTimeRemaining(timeStr.trim());
-      }
-    }
-  }, [startDate, startTime, endDate, endTime]);
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setBannerFile(file);
-      const reader = new FileReader();
-      reader.onload = () => setBannerImage(reader.result as string);
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      setBannerFile(file);
-      const reader = new FileReader();
-      reader.onload = () => setBannerImage(reader.result as string);
-      reader.readAsDataURL(file);
-    }
-  };
-
-  // Convert date to DD/MM/YYYY format
-  const formatDateForBackend = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
-  };
-
-  // Format time to HH:MM:SS
-  const formatTimeForBackend = (time: { hours: string; minutes: string; seconds: string }): string => {
-    return `${time.hours.padStart(2, '0')}:${time.minutes.padStart(2, '0')}:${time.seconds.padStart(2, '0')}`;
-  };
-
-  // Convert file to base64
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => {
-        const base64 = reader.result as string;
-        resolve(base64.split(',')[1]);
-      };
-      reader.onerror = reject;
+    const response = await fetch(`${API_BASE_URL}/api/create_challenge`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(payload),
     });
-  };
 
-  const canGoNext = () => {
-    switch(step) {
-      case 1: return challengeTitle && selectedCategory;
-      case 2: return winCondition;
-      case 3: return startDate && endDate;
-      case 4: return stakeAmount > 0;
-      default: return false;
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+      throw new Error(errorData.message || `API error: ${response.status}`);
     }
+
+    return response.json();
   };
 
-  const handleNext = async () => {
-    if (canGoNext()) {
-      if (step < 4) {
-        setStep(step + 1);
-      } else {
-        // On step 4, check wallet before submitting
-        if (!signer && !walletConnecting) {
-          // Prompt wallet connection
-          const connected = await requestWalletConnection();
-          if (!connected) {
-            return; // Don't proceed if connection failed
-          }
-        }
-        handleSubmit();
-      }
-    }
-  };
+  // Submit handler
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
 
-  // ============================================
-  // SUBMIT TO BLOCKCHAIN & BACKEND
-  // ============================================
-
-  const handleSubmit = async () => {
-    // Check wallet connection - IMPROVED
-    if (walletConnecting) {
-      alert('⏳ Wallet is still connecting. Please wait a moment...');
+    if (!isWalletConnected || !walletAddress) {
+      setError('Please connect your wallet');
       return;
     }
 
-    if (!signer || !provider) {
-      // Try to connect wallet
-      const connected = await requestWalletConnection();
-      if (!connected) {
-        alert('❌ Please connect your Farcaster wallet to continue.');
-        return;
-      }
-      return; // Will retry after connection
-    }
-
-    // Check Farcaster username
-    if (!farcasterUsername) {
-      alert('Farcaster username not found. Please try again.');
+    if (!neynarUser) {
+      setError('Farcaster account not found');
       return;
     }
 
-    // Check banner
-    if (!bannerFile) {
-      alert('Please upload a banner image');
+    if (!banner.data) {
+      setError('Please upload a banner image');
       return;
     }
+
+    setLoading(true);
+    setError(null);
+    setStep('checking_permit');
+    setTxHash(null);
+    setChallengeId(null);
 
     try {
-      // Convert banner to base64
-      const bannerBase64 = await fileToBase64(bannerFile);
+      console.log('👤 Wallet:', walletAddress);
+      console.log('🟣 Farcaster:', getNeynarUsername(neynarUser));
 
-      // Prepare challenge data
-      const challengeData = {
-        farcasterUsername,
-        title: challengeTitle,
-        category: selectedCategory!,
-        description: description || challengeTitle,
-        winCondition,
-        startDate: formatDateForBackend(startDate),
-        startTime: formatTimeForBackend(startTime),
-        endDate: formatDateForBackend(endDate),
-        endTime: formatTimeForBackend(endTime),
-        stakeAmount,
-        votingDurationHours,
-        banner: {
-          filename: bannerFile.name,
-          contentType: bannerFile.type,
-          data: bannerBase64,
-        },
-      };
+      const hasPermit = await checkPermitSupport();
+      console.log('🔐 Permit:', hasPermit ? 'YES' : 'NO');
 
-      console.log('📤 Submitting challenge:', challengeData);
+      let result;
+      if (hasPermit) {
+        try {
+          result = await createWithPermit();
+        } catch (permitError: any) {
+          console.warn('⚠️ Permit failed, using approval');
+          result = await createWithApproval();
+        }
+      } else {
+        result = await createWithApproval();
+      }
 
-      // Call the hook to create challenge
-      await createChallenge(challengeData);
-    } catch (error: any) {
-      console.error('❌ Submit error:', error);
-      alert(`Error: ${error.message || 'Failed to create challenge'}`);
-    }
-  };
+      await saveToBackend(result);
 
-  // ============================================
-  // SUCCESS HANDLER
-  // ============================================
+      setStep('success');
+      console.log('🎉 Success!');
 
-  useEffect(() => {
-    if (createStep === 'success' && onchainData) {
-      // Show success message
+      // Reset after 5s
       setTimeout(() => {
-        alert(`🎉 Challenge #${onchainData.challengeId} created successfully!\n\nTransaction: ${onchainData.txHash}`);
-        
-        // Reset form
-        resetForm();
-      }, 1000);
-    }
-  }, [createStep, onchainData]);
+        setFormData({
+          title: '',
+          category: 'fitness',
+          description: '',
+          winCondition: '',
+          startDate: '',
+          startTime: '00:00:00',
+          endDate: '',
+          endTime: '23:59:59',
+          stakeAmount: 10,
+          votingDurationHours: 24,
+        });
+        setBanner({ file: null, preview: null, data: null });
+        setStep('idle');
+        setTxHash(null);
+        setChallengeId(null);
+      }, 5000);
 
-  const resetForm = () => {
-    setStep(1);
-    setChallengeTitle('');
-    setSelectedCategory(null);
-    setDescription('');
-    setWinCondition('');
-    setSelectedPlatform(null);
-    setStartDate('');
-    setStartTime({ hours: '12', minutes: '00', seconds: '00' });
-    setEndDate('');
-    setEndTime({ hours: '12', minutes: '00', seconds: '00' });
-    setStakeAmount(50);
-    setCustomStake('');
-    setBannerImage(null);
-    setBannerFile(null);
-    setVotingDurationHours(24);
-    resetCreate();
-  };
-
-  // ============================================
-  // GET PROGRESS MESSAGE
-  // ============================================
-
-  const getProgressMessage = () => {
-    if (walletConnecting) {
-      return '🔌 Connecting Farcaster wallet...';
-    }
-    
-    switch (createStep) {
-      case 'checking_permit':
-        return '🔍 Checking permit support...';
-      case 'signing_permit':
-        return '📝 Please sign the permit message in your wallet...';
-      case 'approving':
-        return '⏳ Approving USDC... (Transaction 1/2)';
-      case 'creating':
-        return '⏳ Creating challenge on blockchain...';
-      case 'waiting_confirmation':
-        return '⏳ Waiting for transaction confirmation...';
-      case 'saving_to_api':
-        return '💾 Saving challenge details to database...';
-      case 'success':
-        return '✅ Challenge created successfully!';
-      case 'error':
-        return `❌ ${createError || 'An error occurred'}`;
-      default:
-        return '';
+    } catch (err: any) {
+      console.error('❌ Error:', err);
+      setError(err.message || 'Failed to create challenge');
+      setStep('error');
+    } finally {
+      setLoading(false);
     }
   };
-
-  // ============================================
-  // RENDER - MAIN FORM
-  // ============================================
 
   return (
-    <div className="h-screen bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] overflow-hidden flex flex-col pb-20">
-      {/* Progress Bar */}
-      <div className="absolute top-0 left-0 right-0 h-1 bg-gray-800 z-50">
-        <div 
-          className="h-full bg-gradient-to-r from-[#7C3AED] to-[#a855f7] transition-all duration-300"
-          style={{ width: `${(step / 4) * 100}%` }}
-        />
-      </div>
-
-      {/* Header - Fixed */}
-      <div className="px-4 pt-4 pb-3 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          {step > 1 ? (
-            <button
-              onClick={() => setStep(step - 1)}
-              disabled={isCreating || walletConnecting}
-              className="p-2 rounded-lg bg-black/40 border border-gray-700 text-white active:scale-95 transition-transform disabled:opacity-50"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-          ) : (
-            <div className="w-9"></div>
-          )}
-          
-          <div className="flex-1 text-center">
-            <div className="inline-flex items-center gap-2 bg-black/40 backdrop-blur-md border border-[#7C3AED]/50 rounded-full px-3 py-1 shadow-lg shadow-purple-500/30">
-              <span className="text-[#7C3AED] text-xs font-black uppercase tracking-wider">
-                Step {step} of 4
-              </span>
-            </div>
-          </div>
-          
-          <button
-            onClick={() => {
-              if (signer) {
-                alert(`✅ Connected as @${farcasterUsername}\n\nWallet: ${farcasterWalletAddress}`);
-              } else if (walletConnecting) {
-                alert('⏳ Wallet is connecting...');
-              } else {
-                requestWalletConnection();
-              }
-            }}
-            className="text-xs text-gray-400 hover:text-white transition-colors"
-          >
-            @{farcasterUsername || '...'}
-          </button>
-        </div>
-      </div>
-
-      {/* Wallet Prompt Banner */}
-      {needsWalletPrompt && !signer && !walletConnecting && step === 4 && (
-        <div className="px-4 pb-2">
-          <div className="bg-[#7C3AED]/20 border border-[#7C3AED] rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <p className="text-white font-bold text-sm mb-1">🔐 Connect Farcaster Wallet</p>
-                <p className="text-gray-300 text-xs">
-                  Connect your Farcaster wallet to create challenges
-                </p>
-              </div>
-              <button
-                onClick={requestWalletConnection}
-                disabled={walletConnecting}
-                className="ml-4 bg-[#7C3AED] hover:bg-[#6d2fd1] text-white font-bold py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
-              >
-                Connect
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Wallet Connection Status Banner */}
-      {walletConnecting && (
-        <div className="px-4 pb-2">
-          <div className="bg-blue-500/20 border border-blue-500 rounded-xl p-3">
-            <div className="flex items-center gap-3">
-              <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-              <span className="text-white text-sm font-medium">
-                🔌 Connecting Farcaster wallet...
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Wallet Error Banner */}
-      {walletError && !walletConnecting && (
-        <div className="px-4 pb-2">
-          <div className="bg-orange-500/20 border border-orange-500 rounded-xl p-3">
-            <p className="text-white text-sm">⚠️ {walletError}</p>
-            <button
-              onClick={retryWalletConnection}
-              className="text-orange-400 text-xs underline mt-1 hover:text-orange-300"
-            >
-              Try Again
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Wallet Connected Success Banner */}
-      {signer && !isCreating && step === 4 && (
-        <div className="px-4 pb-2">
-          <div className="bg-green-500/20 border border-green-500 rounded-xl p-3">
-            <div className="flex items-center gap-2">
-              <span className="text-green-400 text-lg">✓</span>
-              <span className="text-white text-sm font-medium">
-                Farcaster wallet connected
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Blockchain Status Banner */}
-      {isCreating && (
-        <div className="px-4 pb-2">
-          <div className="bg-[#7C3AED]/20 border border-[#7C3AED] rounded-xl p-3">
-            <div className="flex items-center gap-3">
-              <div className="w-5 h-5 border-2 border-[#7C3AED] border-t-transparent rounded-full animate-spin"></div>
-              <span className="text-white text-sm font-medium">
-                {getProgressMessage()}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Error Banner */}
-      {createError && (
-        <div className="px-4 pb-2">
-          <div className="bg-red-500/20 border border-red-500 rounded-xl p-3">
-            <p className="text-white text-sm">❌ {createError}</p>
-            <button
-              onClick={resetCreate}
-              className="text-red-400 text-xs underline mt-1"
-            >
-              Try Again
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Content Area - Scrollable */}
-      <div className="flex-1 overflow-y-auto px-4 pb-24">
-        {/* Step 1: Basic Info & Banner */}
-        {step === 1 && (
-          <div className="space-y-4 animate-slideUp">
-            <h2 className="text-3xl font-black text-center uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
-              <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">
-                Basic Info
-              </span>
-            </h2>
-
-            {/* Banner Upload */}
-            <div 
-              className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${
-                isDragging ? 'ring-4 ring-[#7C3AED] scale-[0.98]' : ''
-              }`}
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
-            >
-              {bannerImage ? (
-                <div className="relative aspect-[16/9] group">
-                  <img src={bannerImage} alt="Banner" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
-                    <label className="cursor-pointer bg-white/20 backdrop-blur-md border-2 border-white rounded-xl px-6 py-3 text-white font-bold">
-                      Change Banner
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-                </div>
-              ) : (
-                <label className="flex flex-col items-center justify-center aspect-[16/9] bg-black/40 border-2 border-dashed border-gray-600 hover:border-[#7C3AED] cursor-pointer transition-all duration-300">
-                  <div className="text-center p-4">
-                    <div className="text-5xl mb-3">🖼️</div>
-                    <p className="text-white font-bold text-lg mb-2">Upload Banner</p>
-                    <p className="text-gray-400 text-sm">Drag & drop or click to browse</p>
-                  </div>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                    className="hidden"
-                  />
-                </label>
-              )}
-            </div>
-
-            {/* Challenge Title */}
-            <div>
-              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
-                🏆 Challenge Title
-              </label>
-              <input
-                type="text"
-                value={challengeTitle}
-                onChange={(e) => setChallengeTitle(e.target.value)}
-                placeholder="Bitcoin reaches $100k"
-                maxLength={100}
-                className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 font-bold text-lg outline-none transition-all duration-300"
-              />
-            </div>
-
-            {/* Category Selection */}
-            <div>
-              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
-                📂 Category
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                {CATEGORIES.map((cat) => (
-                  <button
-                    key={cat.id}
-                    onClick={() => setSelectedCategory(cat.id)}
-                    className={`p-3 rounded-xl font-bold transition-all duration-300 ${
-                      selectedCategory === cat.id
-                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white shadow-lg shadow-purple-500/50'
-                        : 'bg-black/40 border-2 border-gray-700 text-gray-300'
-                    }`}
-                  >
-                    <span className="text-2xl block mb-1">{cat.icon}</span>
-                    <span className="text-xs">{cat.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Description (Optional) */}
-            <div>
-              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
-                📝 Description (Optional)
-              </label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Add more context about your challenge..."
-                rows={3}
-                maxLength={500}
-                className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 outline-none resize-none"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Step 2: Win Condition */}
-        {step === 2 && (
-          <div className="space-y-4 animate-slideUp">
-            <h2 className="text-3xl font-black text-center uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
-              <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">
-                Win Condition
-              </span>
-            </h2>
-
-            <div className="bg-black/40 border-2 border-[#7C3AED]/50 rounded-2xl p-6">
-              <p className="text-gray-300 text-sm mb-4">
-                Define what needs to happen for this challenge to be successful. Be specific and measurable.
-              </p>
-              <textarea
-                value={winCondition}
-                onChange={(e) => setWinCondition(e.target.value)}
-                placeholder="E.g., Bitcoin price reaches or exceeds $100,000 on any major exchange by the end date"
-                rows={4}
-                maxLength={500}
-                className="w-full bg-black/40 border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 outline-none resize-none"
-              />
-            </div>
-
-            {/* Social Platform (Optional) */}
-            <div>
-              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
-                📱 Social Platform (Optional)
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {SOCIAL_PLATFORMS.map((platform) => (
-                  <button
-                    key={platform.id}
-                    onClick={() => setSelectedPlatform(platform.id === selectedPlatform ? null : platform.id)}
-                    className={`p-3 rounded-xl font-bold transition-all duration-300 ${
-                      selectedPlatform === platform.id
-                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white'
-                        : 'bg-black/40 border-2 border-gray-700 text-gray-300'
-                    }`}
-                  >
-                    <span className="text-xl block mb-1">{platform.icon}</span>
-                    <span className="text-xs">{platform.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Step 3: Timing */}
-        {step === 3 && (
-          <div className="space-y-4 animate-slideUp">
-            <h2 className="text-3xl font-black text-center uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
-              <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">
-                Set Timeline
-              </span>
-            </h2>
-
-            {/* Start Date */}
-            <div>
-              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
-                📅 Start Date
-              </label>
-              <div className="relative">
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  min={today}
-                  className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-sm transition-all duration-300 outline-none cursor-pointer"
-                  style={{ colorScheme: 'dark' }}
-                />
-              </div>
-            </div>
-
-            {/* Start Time Picker */}
-            <TimePicker
-              label="Start Time"
-              icon="🚀"
-              value={startTime}
-              onChange={setStartTime}
-            />
-
-            {/* End Date */}
-            <div>
-              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
-                📅 End Date
-              </label>
-              <div className="relative">
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  min={startDate || today}
-                  className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-sm transition-all duration-300 outline-none cursor-pointer"
-                  style={{ colorScheme: 'dark' }}
-                />
-              </div>
-            </div>
-
-            {/* End Time Picker */}
-            <TimePicker
-              label="End Time"
-              icon="🏁"
-              value={endTime}
-              onChange={setEndTime}
-            />
-
-            {/* Voting Duration */}
-            <div>
-              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
-                🗳️ Voting Duration (hours)
-              </label>
-              <input
-                type="number"
-                value={votingDurationHours}
-                onChange={(e) => setVotingDurationHours(Number(e.target.value))}
-                min="1"
-                max="168"
-                className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-sm outline-none"
-              />
-              <p className="text-gray-400 text-xs mt-1">
-                Community voting period after challenge ends (1-168 hours)
-              </p>
-            </div>
-
-            {/* Duration Display */}
-            {timeRemaining && (
-              <div className="bg-gradient-to-r from-[#7C3AED]/30 to-[#a855f7]/30 border-2 border-[#7C3AED] rounded-xl p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-200 font-bold text-sm">Duration:</span>
-                  <span className="text-white font-black text-xl">{timeRemaining}</span>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Step 4: Stake */}
-        {step === 4 && (
-          <div className="space-y-4 animate-slideUp">
-            <h2 className="text-3xl font-black text-center uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
-              <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">
-                Set Your Stake
-              </span>
-            </h2>
-
-            {/* Preset Stakes */}
-            <div className="grid grid-cols-3 gap-2">
-              {STAKE_PRESETS.map((amount) => (
-                <button
-                  key={amount}
-                  onClick={() => {
-                    setStakeAmount(amount);
-                    setCustomStake('');
-                  }}
-                  className={`p-4 rounded-xl font-black text-lg transition-all duration-300 ${
-                    stakeAmount === amount && !customStake
-                      ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white shadow-lg shadow-purple-500/50 scale-105'
-                      : 'bg-black/40 border-2 border-gray-700 text-gray-300'
-                  }`}
-                >
-                  ${amount}
-                </button>
-              ))}
-            </div>
-
-            {/* Custom Amount */}
-            <div className="relative">
-              <div className="absolute left-4 top-1/2 -translate-y-1/2 text-[#7C3AED] font-black text-2xl">$</div>
-              <input
-                type="number"
-                value={customStake}
-                onChange={(e) => {
-                  setCustomStake(e.target.value);
-                  setStakeAmount(parseFloat(e.target.value) || 0);
-                }}
-                placeholder="Custom amount"
-                min="1"
-                className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl pl-10 pr-4 py-4 text-white placeholder-gray-500 font-bold text-xl outline-none"
-              />
-            </div>
-
-            {/* Total Display */}
-            <div className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] rounded-2xl p-6 text-center">
-              <p className="text-white/80 font-bold text-sm mb-2 uppercase tracking-wider">Your Stake</p>
-              <p className="text-white font-black text-5xl">${stakeAmount.toFixed(2)} USDC</p>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Bottom Navigation - Fixed */}
-      <div className="fixed bottom-20 left-0 right-0 px-4 pb-4 pt-2 bg-gradient-to-t from-[#0a0118] via-[#0a0118] to-transparent z-40">
-        <button
-          onClick={handleNext}
-          disabled={!canGoNext() || isCreating || walletConnecting}
-          className={`w-full py-4 rounded-xl font-black text-lg uppercase tracking-wider transition-all duration-300 ${
-            canGoNext() && !isCreating && !walletConnecting
-              ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white shadow-lg shadow-purple-500/50 active:scale-95'
-              : 'bg-gray-800 text-gray-500 opacity-50 cursor-not-allowed'
-          }`}
+    <div className="max-w-2xl mx-auto pb-8">
+      {/* Header */}
+      <div className="mb-6">
+        <h2 
+          className="text-3xl font-black text-white mb-2 uppercase tracking-tight"
+          style={{ fontFamily: '"Bebas Neue", sans-serif' }}
         >
-          {walletConnecting ? (
-            <span className="flex items-center justify-center gap-2">
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-              Connecting Wallet...
-            </span>
-          ) : isCreating ? (
-            <span className="flex items-center justify-center gap-2">
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-              {getProgressMessage()}
-            </span>
-          ) : step < 4 ? (
-            <span className="flex items-center justify-center gap-2">
-              Next
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-            </span>
-          ) : !signer ? (
-            '🔐 Connect Wallet to Continue'
-          ) : (
-            '🚀 Launch Challenge'
-          )}
-        </button>
+          Create Challenge
+        </h2>
+        <p className="text-gray-400 text-sm">
+          Set your goal, stake USDC, and prove yourself
+        </p>
       </div>
+
+      {/* Wallet Warning */}
+      {!isWalletConnected && (
+        <div className="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-xl backdrop-blur-md">
+          <p className="text-yellow-400 text-sm font-medium">
+            ⚠️ Connect your wallet to create a challenge
+          </p>
+        </div>
+      )}
+
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="space-y-5">
+        {/* Banner Upload */}
+        <div>
+          <label className="block text-sm font-bold text-white mb-2">
+            Challenge Banner *
+          </label>
+          <div className="relative">
+            <input
+              type="file"
+              accept="image/jpeg,image/jpg,image/png"
+              onChange={handleBannerUpload}
+              disabled={loading}
+              className="hidden"
+              id="banner-upload"
+            />
+            <label
+              htmlFor="banner-upload"
+              className={`
+                block w-full h-40 border-2 border-dashed rounded-xl cursor-pointer
+                transition-all duration-300 overflow-hidden
+                ${banner.preview 
+                  ? 'border-[#7C3AED]' 
+                  : 'border-gray-700 hover:border-[#7C3AED]/50'
+                }
+                ${loading ? 'opacity-50 cursor-not-allowed' : ''}
+              `}
+            >
+              {banner.preview ? (
+                <img 
+                  src={banner.preview} 
+                  alt="Banner preview" 
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <svg className="w-10 h-10 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <p className="text-sm font-medium">Click to upload banner</p>
+                  <p className="text-xs mt-1">JPEG or PNG, max 5MB</p>
+                </div>
+              )}
+            </label>
+          </div>
+        </div>
+
+        {/* Title */}
+        <div>
+          <label className="block text-sm font-bold text-white mb-2">
+            Title *
+          </label>
+          <input
+            type="text"
+            name="title"
+            value={formData.title}
+            onChange={handleChange}
+            required
+            disabled={loading}
+            maxLength={100}
+            className="w-full px-4 py-3 bg-black/40 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-[#7C3AED] transition-colors backdrop-blur-md"
+            placeholder="30 Day Fitness Challenge"
+          />
+        </div>
+
+        {/* Category */}
+        <div>
+          <label className="block text-sm font-bold text-white mb-2">
+            Category *
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => setFormData(prev => ({ ...prev, category: cat.id }))}
+                disabled={loading}
+                className={`
+                  p-3 rounded-xl border-2 transition-all duration-300 text-center
+                  ${formData.category === cat.id
+                    ? 'bg-gradient-to-br from-[#7C3AED] to-[#a855f7] border-[#7C3AED] text-white'
+                    : 'bg-black/40 border-gray-700 text-gray-400 hover:border-[#7C3AED]/50'
+                  }
+                `}
+              >
+                <div className="text-2xl mb-1">{cat.icon}</div>
+                <div className="text-xs font-bold">{cat.label}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Description */}
+        <div>
+          <label className="block text-sm font-bold text-white mb-2">
+            Description *
+          </label>
+          <textarea
+            name="description"
+            value={formData.description}
+            onChange={handleChange}
+            required
+            disabled={loading}
+            rows={3}
+            maxLength={500}
+            className="w-full px-4 py-3 bg-black/40 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-[#7C3AED] transition-colors backdrop-blur-md resize-none"
+            placeholder="I will exercise for 30 minutes every day for 30 days..."
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            {formData.description.length}/500 characters
+          </p>
+        </div>
+
+        {/* Win Condition */}
+        <div>
+          <label className="block text-sm font-bold text-white mb-2">
+            Win Condition *
+          </label>
+          <textarea
+            name="winCondition"
+            value={formData.winCondition}
+            onChange={handleChange}
+            required
+            disabled={loading}
+            rows={2}
+            maxLength={300}
+            className="w-full px-4 py-3 bg-black/40 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-[#7C3AED] transition-colors backdrop-blur-md resize-none"
+            placeholder="Post daily workout proof on Farcaster with #30DayChallenge"
+          />
+        </div>
+
+        {/* Dates */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-bold text-white mb-2">
+              Start Date *
+            </label>
+            <input
+              type="text"
+              name="startDate"
+              value={formData.startDate}
+              onChange={handleChange}
+              required
+              disabled={loading}
+              placeholder="DD/MM/YYYY"
+              className="w-full px-4 py-3 bg-black/40 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-[#7C3AED] transition-colors backdrop-blur-md"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-white mb-2">
+              End Date *
+            </label>
+            <input
+              type="text"
+              name="endDate"
+              value={formData.endDate}
+              onChange={handleChange}
+              required
+              disabled={loading}
+              placeholder="DD/MM/YYYY"
+              className="w-full px-4 py-3 bg-black/40 border border-gray-700 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-[#7C3AED] transition-colors backdrop-blur-md"
+            />
+          </div>
+        </div>
+
+        {/* Stake & Voting */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-bold text-white mb-2">
+              Stake (USDC) *
+            </label>
+            <input
+              type="number"
+              name="stakeAmount"
+              value={formData.stakeAmount}
+              onChange={handleChange}
+              required
+              disabled={loading}
+              min="1"
+              step="1"
+              className="w-full px-4 py-3 bg-black/40 border border-gray-700 rounded-xl text-white focus:outline-none focus:border-[#7C3AED] transition-colors backdrop-blur-md"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-white mb-2">
+              Voting (hours) *
+            </label>
+            <input
+              type="number"
+              name="votingDurationHours"
+              value={formData.votingDurationHours}
+              onChange={handleChange}
+              required
+              disabled={loading}
+              min="1"
+              step="1"
+              className="w-full px-4 py-3 bg-black/40 border border-gray-700 rounded-xl text-white focus:outline-none focus:border-[#7C3AED] transition-colors backdrop-blur-md"
+            />
+          </div>
+        </div>
+
+        {/* Submit */}
+        <button
+          type="submit"
+          disabled={loading || !isWalletConnected || !banner.data}
+          className={`
+            w-full group relative overflow-hidden px-8 py-4 rounded-xl font-black text-lg uppercase tracking-wider
+            transition-all duration-300 border-2
+            ${loading || !isWalletConnected || !banner.data
+              ? 'bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed opacity-50'
+              : 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white border-[#7C3AED] shadow-lg shadow-purple-500/50 hover:scale-[1.02]'
+            }
+          `}
+        >
+          {loading ? STEP_MESSAGES[step] : 'Create Challenge'}
+        </button>
+
+        {/* Error */}
+        {error && (
+          <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl backdrop-blur-md animate-slideDown">
+            <p className="text-red-400 text-sm font-medium text-center">{error}</p>
+          </div>
+        )}
+
+        {/* Success */}
+        {step === 'success' && txHash && (
+          <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-xl backdrop-blur-md animate-slideDown">
+            <p className="text-green-400 font-bold mb-2 text-center">
+              ✅ Challenge Created!
+            </p>
+            <div className="text-sm text-white/80 space-y-1 text-center">
+              <p>Challenge ID: {challengeId}</p>
+              <a
+                href={`https://basescan.org/tx/${txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#7C3AED] hover:underline inline-block"
+              >
+                View on BaseScan →
+              </a>
+            </div>
+          </div>
+        )}
+      </form>
     </div>
   );
 }

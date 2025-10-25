@@ -1,15 +1,15 @@
-// hooks/useCreateChallenge.ts
+// hooks/useCreateChallengeWithFarcaster.ts
 import { useState, useCallback } from 'react';
 import { useAccount, usePublicClient, useWalletClient } from 'wagmi';
-import { type Address, type Hash, parseUnits, formatUnits } from 'viem';
-import { signPermit } from '~/utils/permit';
+import { type Address, type Hash, parseUnits } from 'viem';
+import { signPermit } from '~/utils/permit-wagmi';
+import { useFarcasterAuth } from '~/hooks/useFarcasterAuth';
 
 // ============================================
 // TYPES & INTERFACES
 // ============================================
 
 export interface CreateChallengeFormData {
-  farcasterUsername: string;
   title: string;
   category: string;
   description: string;
@@ -20,7 +20,7 @@ export interface CreateChallengeFormData {
   endTime: string;   // HH:MM:SS
   stakeAmount: number; // In USDC (not wei)
   votingDurationHours: number;
-  banner: {
+  banner?: {
     filename: string;
     contentType: string;
     data: string; // base64
@@ -38,14 +38,16 @@ export interface BackendChallengeData extends CreateChallengeFormData {
   Id: string;
   onchainChallengeId: number;
   txHash: string;
-  votingDeadline: string; // ISO string
-  farcasterFid?: number;
-  farcasterPfpUrl?: string;
+  votingDeadline: string;
+  farcasterFid: number;
+  farcasterUsername: string;
+  farcasterPfpUrl: string;
   walletAddress: string;
 }
 
 export type CreateChallengeStep = 
   | 'idle'
+  | 'checking_farcaster'
   | 'checking_permit'
   | 'signing_permit'
   | 'approving'
@@ -55,37 +57,30 @@ export type CreateChallengeStep =
   | 'success'
   | 'error';
 
-export interface UseCreateChallengeResult {
-  // Main function
+export interface UseCreateChallengeWithFarcasterResult {
   createChallenge: (data: CreateChallengeFormData) => Promise<void>;
-  
-  // State
   loading: boolean;
   error: string | null;
   step: CreateChallengeStep;
-  
-  // Results
   onchainData: OnchainChallengeData | null;
   apiResponse: any | null;
-  
-  // Additional info
   supportsPermit: boolean | null;
-  estimatedGas: string | null;
-  
-  // Wallet info
   isConnected: boolean;
   address: Address | undefined;
   
-  // Reset function
+  // Farcaster status
+  farcasterUser: any;
+  isFullyAuthenticated: boolean;
+  farcasterError: string | null;
+  
   reset: () => void;
 }
 
 // ============================================
-// CONTRACT ABI (Only what we need)
+// CONTRACT ABIs
 // ============================================
 
 const GRINDARENA_ABI = [
-  // Permit functions
   {
     name: 'createChallengeWithPermit',
     type: 'function',
@@ -103,22 +98,6 @@ const GRINDARENA_ABI = [
     outputs: [],
   },
   {
-    name: 'stakeWithPermit',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'challengeId', type: 'uint256' },
-      { name: 'side', type: 'bool' },
-      { name: 'amount', type: 'uint256' },
-      { name: 'deadline', type: 'uint256' },
-      { name: 'v', type: 'uint8' },
-      { name: 'r', type: 'bytes32' },
-      { name: 's', type: 'bytes32' },
-    ],
-    outputs: [],
-  },
-  // Regular functions
-  {
     name: 'createChallenge',
     type: 'function',
     stateMutability: 'nonpayable',
@@ -130,33 +109,6 @@ const GRINDARENA_ABI = [
     ],
     outputs: [],
   },
-  {
-    name: 'stake',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'challengeId', type: 'uint256' },
-      { name: 'side', type: 'bool' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [],
-  },
-  // View functions
-  {
-    name: 'supportsPermit',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ name: '', type: 'bool' }],
-  },
-  {
-    name: 'challengeCount',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  // Events
   {
     name: 'ChallengeCreated',
     type: 'event',
@@ -198,23 +150,37 @@ const USDC_ABI = [
     inputs: [{ name: 'account', type: 'address' }],
     outputs: [{ name: '', type: 'uint256' }],
   },
+  {
+    name: 'DOMAIN_SEPARATOR',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'bytes32' }],
+  },
 ] as const;
 
 // ============================================
 // MAIN HOOK
 // ============================================
 
-export function useCreateChallenge(
+export function useCreateChallengeWithFarcaster(
   contractAddress: Address,
   usdcAddress: Address,
   apiBaseUrl: string,
-  farcasterFid?: number,
-  farcasterPfpUrl?: string
-): UseCreateChallengeResult {
+  neynarApiKey: string
+): UseCreateChallengeWithFarcasterResult {
   // Wagmi hooks
   const { address, isConnected } = useAccount();
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
+
+  // Farcaster authentication
+  const {
+    farcasterUser,
+    isFullyAuthenticated,
+    farcasterError,
+    authenticateWithFarcaster,
+  } = useFarcasterAuth(neynarApiKey, true);
 
   // State
   const [loading, setLoading] = useState(false);
@@ -223,7 +189,6 @@ export function useCreateChallenge(
   const [onchainData, setOnchainData] = useState<OnchainChallengeData | null>(null);
   const [apiResponse, setApiResponse] = useState<any | null>(null);
   const [supportsPermit, setSupportsPermit] = useState<boolean | null>(null);
-  const [estimatedGas, setEstimatedGas] = useState<string | null>(null);
 
   // ============================================
   // HELPER FUNCTIONS
@@ -235,83 +200,56 @@ export function useCreateChallenge(
     return Math.floor(new Date(year, month - 1, day, hours, minutes, seconds).getTime() / 1000);
   }, []);
 
-  const extractChallengeIdFromReceipt = useCallback(async (txHash: Hash): Promise<number> => {
+  const checkBalance = useCallback(async (userAddress: Address, amount: bigint) => {
     if (!publicClient) throw new Error('Public client not available');
-    
-    const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
-    
-    // Find ChallengeCreated event
-    for (const log of receipt.logs) {
-      try {
-        // The first indexed parameter (challengeId) is in topics[1]
-        if (log.topics[0] === '0x...' /* ChallengeCreated event signature */) {
-          const challengeId = BigInt(log.topics[1] || '0');
-          return Number(challengeId);
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-    
-    // Alternative: parse logs properly
-    const logs = await publicClient.getLogs({
-      address: contractAddress,
-      event: {
-        name: 'ChallengeCreated',
-        type: 'event',
-        inputs: [
-          { name: 'challengeId', type: 'uint256', indexed: true },
-          { name: 'creator', type: 'address', indexed: true },
-          { name: 'creatorWager', type: 'uint256', indexed: false },
-          { name: 'deadline', type: 'uint256', indexed: false },
-          { name: 'votingDeadline', type: 'uint256', indexed: false },
-        ],
-      },
-      fromBlock: receipt.blockNumber,
-      toBlock: receipt.blockNumber,
-    });
 
-    if (logs.length > 0 && logs[0].args.challengeId) {
-      return Number(logs[0].args.challengeId);
-    }
-    
-    throw new Error('ChallengeCreated event not found in transaction receipt');
-  }, [publicClient, contractAddress]);
-
-  const checkPermitSupport = useCallback(async (): Promise<boolean> => {
-    if (!publicClient) return false;
-    
-    try {
-      const supported = await publicClient.readContract({
-        address: contractAddress,
-        abi: GRINDARENA_ABI,
-        functionName: 'supportsPermit',
-      });
-      
-      setSupportsPermit(supported);
-      return supported;
-    } catch (error) {
-      console.error('Error checking permit support:', error);
-      return false;
-    }
-  }, [publicClient, contractAddress]);
-
-  const checkBalance = useCallback(async (userAddress: Address, amount: bigint): Promise<void> => {
-    if (!publicClient) throw new Error('Public client not available');
-    
     const balance = await publicClient.readContract({
       address: usdcAddress,
       abi: USDC_ABI,
       functionName: 'balanceOf',
       args: [userAddress],
     });
-    
+
     if (balance < amount) {
-      const balanceUSDC = formatUnits(balance, 6);
-      const requiredUSDC = formatUnits(amount, 6);
-      throw new Error(`Insufficient USDC balance. You have ${balanceUSDC} USDC but need ${requiredUSDC} USDC`);
+      throw new Error(
+        `Insufficient USDC balance. Required: ${amount / 10n ** 6n}, Have: ${balance / 10n ** 6n}`
+      );
     }
   }, [publicClient, usdcAddress]);
+
+  const checkPermitSupport = useCallback(async (): Promise<boolean> => {
+    if (!publicClient) return false;
+
+    try {
+      await publicClient.readContract({
+        address: usdcAddress,
+        abi: USDC_ABI,
+        functionName: 'DOMAIN_SEPARATOR',
+      });
+      setSupportsPermit(true);
+      return true;
+    } catch {
+      setSupportsPermit(false);
+      return false;
+    }
+  }, [publicClient, usdcAddress]);
+
+  const extractChallengeIdFromReceipt = useCallback(async (txHash: Hash): Promise<number> => {
+    if (!publicClient) throw new Error('Public client not available');
+    
+    const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
+    
+    // Parse logs to find ChallengeCreated event
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() === contractAddress.toLowerCase()) {
+        // The challengeId is the first indexed parameter (topics[1])
+        const challengeId = BigInt(log.topics[1] || '0');
+        return Number(challengeId);
+      }
+    }
+    
+    throw new Error('Could not find ChallengeCreated event in transaction receipt');
+  }, [publicClient, contractAddress]);
 
   // ============================================
   // CREATE WITH PERMIT (1 TRANSACTION)
@@ -323,17 +261,16 @@ export function useCreateChallenge(
   ): Promise<OnchainChallengeData> => {
     if (!publicClient || !walletClient) throw new Error('Clients not available');
     
-    setStep('signing_permit');
-    
     const stakeAmountWei = parseUnits(data.stakeAmount.toString(), 6);
     const deadline = parseDateTime(data.endDate, data.endTime);
     const votingDurationSeconds = data.votingDurationHours * 3600;
 
-    // Check balance
     await checkBalance(userAddress, stakeAmountWei);
 
-    // Generate permit signature
-    console.log('📝 Generating permit signature...');
+    setStep('signing_permit');
+    console.log('📝 Signing permit...');
+
+    // Sign permit using the utility function
     const permitSig = await signPermit(
       usdcAddress,
       userAddress,
@@ -346,7 +283,7 @@ export function useCreateChallenge(
     setStep('creating');
     console.log('✨ Creating challenge with permit...');
 
-    // Create challenge with permit
+    // Call contract with permit
     const hash = await walletClient.writeContract({
       address: contractAddress,
       abi: GRINDARENA_ABI,
@@ -393,7 +330,6 @@ export function useCreateChallenge(
     const deadline = parseDateTime(data.endDate, data.endTime);
     const votingDurationSeconds = data.votingDurationHours * 3600;
 
-    // Check balance
     await checkBalance(userAddress, stakeAmountWei);
 
     // Check current allowance
@@ -423,7 +359,6 @@ export function useCreateChallenge(
     setStep('creating');
     console.log('✨ Creating challenge...');
 
-    // Create challenge
     const hash = await walletClient.writeContract({
       address: contractAddress,
       abi: GRINDARENA_ABI,
@@ -461,10 +396,13 @@ export function useCreateChallenge(
     onchainData: OnchainChallengeData,
     userAddress: Address
   ): Promise<any> => {
+    if (!farcasterUser) {
+      throw new Error('Farcaster user not authenticated');
+    }
+
     setStep('saving_to_api');
     console.log('💾 Saving to backend API...');
 
-    // Calculate voting deadline
     const endDateTime = parseDateTime(formData.endDate, formData.endTime);
     const votingDeadlineMs = endDateTime * 1000 + formData.votingDurationHours * 3600000;
     const votingDeadline = new Date(votingDeadlineMs).toISOString();
@@ -476,8 +414,9 @@ export function useCreateChallenge(
       txHash: onchainData.txHash,
       votingDeadline,
       walletAddress: userAddress,
-      farcasterFid,
-      farcasterPfpUrl,
+      farcasterFid: farcasterUser.fid,
+      farcasterUsername: farcasterUser.username,
+      farcasterPfpUrl: farcasterUser.pfpUrl,
     };
 
     const response = await fetch(`${apiBaseUrl}/api/create_challenge`, {
@@ -498,15 +437,35 @@ export function useCreateChallenge(
     console.log('✅ Saved to backend:', result);
     
     return result;
-  }, [apiBaseUrl, parseDateTime, farcasterFid, farcasterPfpUrl]);
+  }, [apiBaseUrl, parseDateTime, farcasterUser]);
 
   // ============================================
   // MAIN CREATE CHALLENGE FUNCTION
   // ============================================
 
   const createChallenge = useCallback(async (data: CreateChallengeFormData) => {
+    // Check wallet connection
     if (!isConnected || !address) {
-      setError('Please connect your wallet with Farcaster');
+      setError('Please connect your wallet');
+      return;
+    }
+
+    // Check Farcaster authentication
+    setStep('checking_farcaster');
+    if (!farcasterUser) {
+      console.log('🔄 Authenticating with Farcaster...');
+      try {
+        await authenticateWithFarcaster();
+      } catch (err: any) {
+        setError(err.message || 'Failed to authenticate with Farcaster');
+        setStep('error');
+        return;
+      }
+    }
+
+    if (!farcasterUser) {
+      setError('Farcaster authentication required');
+      setStep('error');
       return;
     }
 
@@ -522,8 +481,8 @@ export function useCreateChallenge(
     setApiResponse(null);
 
     try {
-      console.log('👤 User:', address);
-      console.log('🟣 Farcaster:', data.farcasterUsername, farcasterFid ? `(FID: ${farcasterFid})` : '');
+      console.log('👤 Wallet:', address);
+      console.log('🟣 Farcaster:', farcasterUser.username, `(FID: ${farcasterUser.fid})`);
 
       // Check if permit is supported
       const hasPermit = await checkPermitSupport();
@@ -540,9 +499,8 @@ export function useCreateChallenge(
           console.warn('❌ Permit failed:', permitError.message);
           
           // If permit fails, fall back to approval flow
-          if (permitError.message.includes('Permit not supported') || 
-              permitError.message.includes('User rejected') ||
-              permitError.message.includes('rejected')) {
+          if (permitError.message.includes('rejected') ||
+              permitError.message.includes('User rejected')) {
             console.log('🔄 Falling back to approval flow...');
             result = await createWithApproval(data, address);
             console.log('✅ Created with approval (2 transactions)');
@@ -572,7 +530,17 @@ export function useCreateChallenge(
     } finally {
       setLoading(false);
     }
-  }, [isConnected, address, walletClient, farcasterFid, checkPermitSupport, createWithPermit, createWithApproval, saveToBackend]);
+  }, [
+    isConnected,
+    address,
+    farcasterUser,
+    walletClient,
+    authenticateWithFarcaster,
+    checkPermitSupport,
+    createWithPermit,
+    createWithApproval,
+    saveToBackend,
+  ]);
 
   // ============================================
   // RESET FUNCTION
@@ -585,7 +553,6 @@ export function useCreateChallenge(
     setOnchainData(null);
     setApiResponse(null);
     setSupportsPermit(null);
-    setEstimatedGas(null);
   }, []);
 
   // ============================================
@@ -600,9 +567,11 @@ export function useCreateChallenge(
     onchainData,
     apiResponse,
     supportsPermit,
-    estimatedGas,
     isConnected,
     address,
+    farcasterUser,
+    isFullyAuthenticated,
+    farcasterError,
     reset,
   };
 }
@@ -613,6 +582,7 @@ export function useCreateChallenge(
 
 export const STEP_MESSAGES: Record<CreateChallengeStep, string> = {
   idle: '',
+  checking_farcaster: '🟣 Checking Farcaster authentication...',
   checking_permit: '🔍 Checking permit support...',
   signing_permit: '📝 Please sign the permit message in your wallet...',
   approving: '⏳ Approving USDC... (Transaction 1/2)',

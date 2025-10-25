@@ -2,6 +2,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useMiniApp } from "@neynar/react";
+import { useAccount, useConnect, useDisconnect } from "wagmi";
 import { Header } from "~/components/ui/Header";
 import { Footer } from "~/components/ui/Footer";
 import { MarketTab, CreateTab, LeaderboardTab, RewardsTab } from "~/components/ui/tabs";
@@ -27,6 +28,11 @@ export default function App(
     currentTab,
   } = useMiniApp();
 
+  // Wagmi hooks for wallet connection
+  const { address, isConnected, isConnecting } = useAccount();
+  const { connectors, connect, isPending } = useConnect();
+  const { disconnect } = useDisconnect();
+
   const { user: neynarUser } = useNeynarUser(context || undefined);
   
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(false);
@@ -34,6 +40,45 @@ export default function App(
   const [selectedInterests, setSelectedInterests] = useState<string[]>([]);
   const [isCheckingUser, setIsCheckingUser] = useState(true);
   const [registrationError, setRegistrationError] = useState<string | null>(null);
+  const [hasAttemptedConnect, setHasAttemptedConnect] = useState(false);
+
+  // Auto-connect wallet when SDK loads
+  useEffect(() => {
+    async function autoConnectWallet() {
+      if (!isSDKLoaded || isConnected || isConnecting || hasAttemptedConnect || isPending) {
+        return;
+      }
+
+      try {
+        setHasAttemptedConnect(true);
+        
+        // Try to find Coinbase Wallet first (best for Farcaster)
+        const coinbaseConnector = connectors.find(
+          connector => connector.name.toLowerCase().includes('coinbase')
+        );
+        
+        // Fallback to first available connector
+        const connectorToUse = coinbaseConnector || connectors[0];
+        
+        if (connectorToUse) {
+          console.log('🔌 Auto-connecting wallet:', connectorToUse.name);
+          await connect({ connector: connectorToUse });
+        }
+      } catch (error) {
+        console.error('Auto-connect failed:', error);
+        // Continue without wallet - user can connect manually later
+      }
+    }
+
+    autoConnectWallet();
+  }, [isSDKLoaded, isConnected, isConnecting, connectors, connect, hasAttemptedConnect, isPending]);
+
+  // Log wallet connection status
+  useEffect(() => {
+    if (isConnected && address) {
+      console.log('✅ Wallet connected:', address);
+    }
+  }, [isConnected, address]);
 
   // Check if user exists in backend when component mounts
   useEffect(() => {
@@ -92,6 +137,22 @@ export default function App(
     console.error('Registration error:', error);
   };
 
+  // Manual wallet connect (if auto-connect fails)
+  const handleManualConnect = async () => {
+    try {
+      const coinbaseConnector = connectors.find(
+        connector => connector.name.toLowerCase().includes('coinbase')
+      );
+      const connectorToUse = coinbaseConnector || connectors[0];
+      
+      if (connectorToUse) {
+        await connect({ connector: connectorToUse });
+      }
+    } catch (error) {
+      console.error('Manual connect failed:', error);
+    }
+  };
+
   // Loading state while SDK initializes
   if (!isSDKLoaded) {
     return (
@@ -102,6 +163,30 @@ export default function App(
             <div className="absolute inset-0 rounded-full border-4 border-t-[#7C3AED] animate-spin"></div>
           </div>
           <p className="text-white font-bold text-sm">Loading Arena...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Loading state while connecting wallet (first time only)
+  if (isConnecting && !hasCompletedOnboarding) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118]">
+        <div className="text-center px-4">
+          <div className="relative w-16 h-16 mx-auto mb-4">
+            <div className="absolute inset-0 rounded-full border-4 border-[#7C3AED]/30"></div>
+            <div className="absolute inset-0 rounded-full border-4 border-t-[#7C3AED] animate-spin"></div>
+            <div className="absolute inset-0 bg-[#7C3AED] rounded-full blur-xl opacity-50 animate-pulse"></div>
+          </div>
+          <p className="text-white font-bold text-sm">Connecting wallet...</p>
+          {!isConnected && hasAttemptedConnect && (
+            <button
+              onClick={handleManualConnect}
+              className="mt-4 px-4 py-2 bg-[#7C3AED] text-white rounded-lg text-sm hover:bg-[#6B2FD6] transition-colors"
+            >
+              Retry Connection
+            </button>
+          )}
         </div>
       </div>
     );
@@ -155,6 +240,8 @@ export default function App(
         farcasterUsername={getNeynarUsername(neynarUser)}
         farcasterWalletAddress={getNeynarWalletAddress(neynarUser)}
         onError={handleRegistrationError}
+        walletAddress={address}
+        isWalletConnected={isConnected}
       />
     );
   }
@@ -172,7 +259,12 @@ export default function App(
     >
       {/* Header - z-10 */}
       <div className="relative z-10 flex-shrink-0">
-        <Header neynarUser={neynarUser} />
+        <Header 
+          neynarUser={neynarUser} 
+          walletAddress={address}
+          isWalletConnected={isConnected}
+          onDisconnect={disconnect}
+        />
       </div>
 
       {/* Main Content - z-0, EXTRA bottom padding to clear footer */}
@@ -180,7 +272,13 @@ export default function App(
         <div className="px-4 py-3 pb-28">
           {/* pb-28 = 112px of clearance for footer */}
           {(currentTab === Tab.Market || !currentTab) && <MarketTab />}
-          {currentTab === Tab.Create && <CreateTab />}
+          {currentTab === Tab.Create && (
+            <CreateTab 
+              neynarUser={neynarUser}
+              walletAddress={address}
+              isWalletConnected={isConnected}
+            />
+          )}
           {currentTab === Tab.Leaderboard && <LeaderboardTab />}
           {currentTab === Tab.Rewards && <RewardsTab />}
         </div>

@@ -1,6 +1,7 @@
 // components/onboarding/InterestSelection.tsx
 "use client";
 import { useState } from 'react';
+import { type Address } from 'viem';
 import { createUser } from '~/lib/api';
 
 interface Interest {
@@ -27,13 +28,17 @@ interface InterestSelectionProps {
   farcasterUsername?: string;
   farcasterWalletAddress?: string;
   onError?: (error: string) => void;
+  walletAddress?: Address;
+  isWalletConnected?: boolean;
 }
 
 export default function InterestSelection({ 
   onComplete, 
   farcasterUsername,
   farcasterWalletAddress,
-  onError 
+  onError,
+  walletAddress,
+  isWalletConnected
 }: InterestSelectionProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [animatingId, setAnimatingId] = useState<string | null>(null);
@@ -70,7 +75,7 @@ export default function InterestSelection({
           const response = await createUser({
             farcasterUsername,
             interests: Array.from(selected),
-            farcasterWalletAddress,
+            farcasterWalletAddress: walletAddress || farcasterWalletAddress, // Use connected wallet if available
           });
 
           if (!response.success) {
@@ -149,6 +154,13 @@ export default function InterestSelection({
               <span className="text-green-400 text-lg animate-bounce-in">✓</span>
             )}
           </div>
+          
+          {/* Wallet Connection Status */}
+          {isWalletConnected && walletAddress && (
+            <div className="mt-2 text-xs text-gray-400">
+              Wallet: {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)} ✓
+            </div>
+          )}
         </div>
 
         {/* Error Message */}
