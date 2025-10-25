@@ -250,6 +250,23 @@ export function CreateTab({
   const [txHash, setTxHash] = useState<string | null>(null);
   const [challengeId, setChallengeId] = useState<number | null>(null);
 
+  // Debug console
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const [showDebug, setShowDebug] = useState(true);
+
+  const addDebugLog = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') => {
+    const emoji = {
+      info: 'ℹ️',
+      success: '✅',
+      error: '❌',
+      warning: '⚠️',
+    };
+    const timestamp = new Date().toLocaleTimeString();
+    const log = `${timestamp} ${emoji[type]} ${message}`;
+    console.log(log);
+    setDebugLogs(prev => [...prev.slice(-50), log]); // Keep last 50 logs
+  };
+
   // ============================================
   // CALCULATE DURATION
   // ============================================
@@ -378,9 +395,29 @@ export function CreateTab({
       throw new Error('Wallet not connected');
     }
 
+    addDebugLog('Starting approval flow...', 'info');
+
     const stakeAmountWei = formatUSDCAmount(stakeAmount);
     const deadlineUnix = parseDateTime(endDate, endTime);
     const votingDurationSeconds = votingDurationHours * 3600;
+
+    addDebugLog(`Stake: ${stakeAmount} USDC = ${stakeAmountWei.toString()} wei`, 'info');
+    addDebugLog(`Deadline: ${deadlineUnix} (${new Date(deadlineUnix * 1000).toISOString()})`, 'info');
+
+    // Check balance
+    const balance = await publicClient.readContract({
+      address: USDC_ADDRESS,
+      abi: USDC_ABI,
+      functionName: 'balanceOf',
+      args: [walletAddress],
+    });
+
+    addDebugLog(`Balance: ${Number(balance) / 1_000_000} USDC`, 'success');
+
+    if (balance < stakeAmountWei) {
+      addDebugLog(`Insufficient USDC! Need ${stakeAmount}, have ${Number(balance) / 1_000_000}`, 'error');
+      throw new Error(`Insufficient USDC. Need ${stakeAmount} USDC`);
+    }
 
     // Check allowance
     const currentAllowance = await publicClient.readContract({
@@ -390,8 +427,11 @@ export function CreateTab({
       args: [walletAddress, CONTRACT_ADDRESS],
     });
 
+    addDebugLog(`Allowance: ${currentAllowance.toString()} wei`, 'info');
+
     // Approve if needed
     if (currentAllowance < stakeAmountWei) {
+      addDebugLog('Approval needed, requesting...', 'warning');
       setStep('approving');
       const approveHash = await walletClient.writeContract({
         address: USDC_ADDRESS,
@@ -399,11 +439,17 @@ export function CreateTab({
         functionName: 'approve',
         args: [CONTRACT_ADDRESS, stakeAmountWei],
       });
+      addDebugLog(`Approval tx: ${approveHash}`, 'success');
       await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      addDebugLog('Approval confirmed!', 'success');
+    } else {
+      addDebugLog('Already approved, skipping', 'success');
     }
 
     // Create challenge
+    addDebugLog('Creating challenge...', 'info');
     setStep('creating');
+    
     const hash = await walletClient.writeContract({
       address: CONTRACT_ADDRESS,
       abi: CONTRACT_ABI,
@@ -416,11 +462,42 @@ export function CreateTab({
       ],
     });
 
+    addDebugLog(`Create tx: ${hash}`, 'success');
     setTxHash(hash);
     setStep('waiting_confirmation');
 
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    const challengeIdFromLogs = Number(receipt.logs[0]?.topics[1] || '0');
+    addDebugLog(`Confirmed! Block: ${receipt.blockNumber}`, 'success');
+    
+    // Parse challenge ID
+    let challengeIdFromLogs = 0;
+    
+    if (receipt.logs && receipt.logs.length > 0) {
+      addDebugLog(`Found ${receipt.logs.length} logs`, 'info');
+      
+      if (receipt.logs[0]?.topics[1]) {
+        challengeIdFromLogs = Number(receipt.logs[0].topics[1]);
+        addDebugLog(`Challenge ID from logs: ${challengeIdFromLogs}`, 'success');
+      }
+      
+      for (const log of receipt.logs) {
+        if (log.topics.length > 1) {
+          const possibleId = Number(log.topics[1]);
+          if (possibleId > 0 && possibleId < 1000000) {
+            challengeIdFromLogs = possibleId;
+            addDebugLog(`Found valid ID: ${challengeIdFromLogs}`, 'success');
+            break;
+          }
+        }
+      }
+    }
+
+    if (challengeIdFromLogs === 0) {
+      addDebugLog('Could not parse challenge ID!', 'error');
+      throw new Error('Failed to get challenge ID from transaction');
+    }
+
+    addDebugLog(`Final Challenge ID: ${challengeIdFromLogs}`, 'success');
     setChallengeId(challengeIdFromLogs);
 
     return { hash, challengeId: challengeIdFromLogs };
@@ -434,20 +511,16 @@ export function CreateTab({
       throw new Error('Banner is required');
     }
 
-    console.log('💾 Starting backend save...');
-    console.log('📊 Onchain data:', onchainData);
-
+    addDebugLog('Converting banner to base64...', 'info');
     const bannerBase64 = await fileToBase64(bannerFile);
-    console.log('🖼️ Banner converted to base64, length:', bannerBase64.length);
+    addDebugLog(`Banner size: ${bannerBase64.length} chars`, 'success');
 
     const startDateTimeUnix = parseDateTime(startDate, startTime);
     const endDateTimeUnix = parseDateTime(endDate, endTime);
     const votingDeadlineUnix = endDateTimeUnix + votingDurationHours * 3600;
 
-    console.log('⏰ Timestamps:');
-    console.log('  Start:', startDateTimeUnix, new Date(startDateTimeUnix * 1000).toISOString());
-    console.log('  End:', endDateTimeUnix, new Date(endDateTimeUnix * 1000).toISOString());
-    console.log('  Voting deadline:', votingDeadlineUnix, new Date(votingDeadlineUnix * 1000).toISOString());
+    addDebugLog(`Start: ${formatDateForBackend(startDateTimeUnix)} ${formatTimeForBackend(startDateTimeUnix)}`, 'info');
+    addDebugLog(`End: ${formatDateForBackend(endDateTimeUnix)} ${formatTimeForBackend(endDateTimeUnix)}`, 'info');
 
     const payload = {
       Id: `${walletAddress?.toLowerCase()}_challenge${onchainData.challengeId}`,
@@ -476,13 +549,7 @@ export function CreateTab({
       txHash: onchainData.hash,
     };
 
-    console.log('📤 Payload to send:');
-    console.log(JSON.stringify({
-      ...payload,
-      banner: { ...payload.banner, data: `[${bannerBase64.length} chars]` }
-    }, null, 2));
-
-    console.log('🌐 API endpoint:', `${API_BASE_URL}/api/create_challenge`);
+    addDebugLog(`Sending to API: ${API_BASE_URL}/api/create_challenge`, 'info');
 
     try {
       const response = await fetch(`${API_BASE_URL}/api/create_challenge`, {
@@ -494,33 +561,26 @@ export function CreateTab({
         body: JSON.stringify(payload),
       });
 
-      console.log('📡 Response status:', response.status, response.statusText);
-      console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+      addDebugLog(`API Response: ${response.status} ${response.statusText}`, response.ok ? 'success' : 'error');
 
       const responseText = await response.text();
-      console.log('📡 Response body (raw):', responseText);
-
+      
       if (!response.ok) {
+        addDebugLog(`API Error: ${responseText}`, 'error');
         let errorData;
         try {
           errorData = JSON.parse(responseText);
         } catch {
           errorData = { message: responseText || 'Unknown error' };
         }
-        console.error('❌ API error response:', errorData);
         throw new Error(errorData.message || `API error: ${response.status}`);
       }
 
       const result = JSON.parse(responseText);
-      console.log('✅ API success response:', result);
+      addDebugLog('API Success!', 'success');
       return result;
     } catch (fetchError: any) {
-      console.error('❌ Fetch error:', fetchError);
-      console.error('Error details:', {
-        message: fetchError.message,
-        name: fetchError.name,
-        stack: fetchError.stack,
-      });
+      addDebugLog(`Fetch Error: ${fetchError.message}`, 'error');
       throw fetchError;
     }
   };
@@ -529,18 +589,39 @@ export function CreateTab({
   // SUBMIT HANDLER
   // ============================================
   const handleSubmit = async () => {
+    addDebugLog('=== STARTING CHALLENGE CREATION ===', 'info');
+
+    // Validation checks
+    addDebugLog(`Wallet: ${walletAddress ? '✅' : '❌'}`, walletAddress ? 'success' : 'error');
+    addDebugLog(`Neynar: ${neynarUser ? '✅' : '❌'}`, neynarUser ? 'success' : 'error');
+    addDebugLog(`Banner: ${bannerFile ? '✅' : '❌'}`, bannerFile ? 'success' : 'error');
+    addDebugLog(`Title: ${challengeTitle || '❌'}`, challengeTitle ? 'success' : 'error');
+    addDebugLog(`Category: ${selectedCategory || '❌'}`, selectedCategory ? 'success' : 'error');
+    addDebugLog(`Win condition: ${winCondition ? '✅' : '❌'}`, winCondition ? 'success' : 'error');
+    addDebugLog(`Dates: ${startDate && endDate ? '✅' : '❌'}`, startDate && endDate ? 'success' : 'error');
+    addDebugLog(`Stake: ${stakeAmount || '❌'}`, stakeAmount ? 'success' : 'error');
+
     if (!walletAddress) {
       setError('Please connect your wallet');
+      addDebugLog('Validation failed: No wallet', 'error');
       return;
     }
 
     if (!neynarUser) {
       setError('Farcaster account not found');
+      addDebugLog('Validation failed: No Neynar user', 'error');
       return;
     }
 
     if (!bannerFile) {
       setError('Please upload a banner image');
+      addDebugLog('Validation failed: No banner', 'error');
+      return;
+    }
+
+    if (!challengeTitle || !selectedCategory || !winCondition || !startDate || !endDate || !stakeAmount) {
+      setError('Please fill in all required fields');
+      addDebugLog('Validation failed: Missing fields', 'error');
       return;
     }
 
@@ -551,27 +632,24 @@ export function CreateTab({
     setChallengeId(null);
 
     try {
-      console.log('👤 Wallet:', walletAddress);
-      console.log('🟣 Farcaster:', farcasterUsername);
-
-      // Always use approval flow for reliability
-      console.log('🔐 Using approval flow (2 transactions)');
+      addDebugLog(`User: @${farcasterUsername} (FID: ${farcasterFid})`, 'info');
+      addDebugLog('Using 2-transaction approval flow', 'info');
       
       const result = await createWithApproval();
-      console.log('✅ Created with approval (2 transactions)');
+      addDebugLog('Blockchain creation complete!', 'success');
 
       await saveToBackend(result);
 
       setStep('success');
-      console.log('🎉 Challenge created successfully!');
+      addDebugLog('=== CHALLENGE CREATED SUCCESSFULLY ===', 'success');
 
-      // Reset after 3s
       setTimeout(() => {
         resetForm();
-      }, 3000);
+        setDebugLogs([]);
+      }, 5000);
 
     } catch (err: any) {
-      console.error('❌ Error:', err);
+      addDebugLog(`ERROR: ${err.message}`, 'error');
       setError(err.message || 'Failed to create challenge');
       setStep('error');
     } finally {
@@ -1022,6 +1100,46 @@ export function CreateTab({
           </div>
         )}
       </div>
+
+      {/* Debug Console */}
+      {showDebug && debugLogs.length > 0 && (
+        <div className="fixed bottom-24 left-2 right-2 max-h-64 bg-black/95 border border-[#7C3AED] rounded-xl overflow-hidden z-50">
+          <div className="flex items-center justify-between p-2 bg-[#7C3AED]/20 border-b border-[#7C3AED]">
+            <span className="text-white text-xs font-bold">🔍 Debug Console</span>
+            <button
+              onClick={() => setShowDebug(false)}
+              className="text-gray-400 hover:text-white text-xs"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="overflow-y-auto max-h-56 p-2 space-y-1">
+            {debugLogs.map((log, i) => (
+              <div
+                key={i}
+                className={`text-xs font-mono ${
+                  log.includes('❌') ? 'text-red-400' :
+                  log.includes('✅') ? 'text-green-400' :
+                  log.includes('⚠️') ? 'text-yellow-400' :
+                  'text-gray-300'
+                }`}
+              >
+                {log}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Debug Toggle (when hidden) */}
+      {!showDebug && debugLogs.length > 0 && (
+        <button
+          onClick={() => setShowDebug(true)}
+          className="fixed bottom-24 right-4 bg-[#7C3AED] text-white rounded-full w-12 h-12 flex items-center justify-center shadow-lg z-50"
+        >
+          🔍
+        </button>
+      )}
 
       {/* Bottom Navigation - Fixed */}
       <div className="fixed bottom-20 left-0 right-0 px-4 pb-4 pt-2 bg-gradient-to-t from-[#0a0118] via-[#0a0118] to-transparent z-40">
