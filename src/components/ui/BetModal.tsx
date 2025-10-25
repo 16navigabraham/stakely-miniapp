@@ -33,15 +33,12 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
   const profit = stakeAmount ? parseFloat(stakeAmount).toFixed(2) : '0.00';
 
   return (
-    // CENTERED OVERLAY - Not bottom sheet
     <div 
       className="fixed inset-0 z-[200] flex items-center justify-center p-4 animate-fadeIn"
       onClick={onClose}
     >
-      {/* Backdrop with strong blur */}
       <div className="absolute inset-0 bg-black/90 backdrop-blur-md"></div>
       
-      {/* Modal Container - CENTERED, not bottom */}
       <div 
         className="relative w-full max-w-md bg-gradient-to-b from-[#1a0b2e] via-[#0f0520] to-[#0a0118] rounded-2xl shadow-2xl max-h-[85vh] flex flex-col animate-scaleIn border-2 border-purple-500/60"
         onClick={(e) => e.stopPropagation()}
@@ -49,7 +46,6 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
           boxShadow: '0 20px 80px rgba(124, 58, 237, 0.6), 0 0 120px rgba(124, 58, 237, 0.4)',
         }}
       >
-        {/* Close Button */}
         <button
           onClick={onClose}
           className="absolute -top-3 -right-3 z-10 w-10 h-10 rounded-full bg-purple-600 border-2 border-purple-400 flex items-center justify-center text-white hover:bg-purple-500 hover:scale-110 transition-all shadow-lg"
@@ -59,9 +55,7 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
           </svg>
         </button>
 
-        {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto scrollbar-hide px-6 pt-6 pb-4">
-          {/* Challenge Header */}
           <div className="mb-5">
             <div className="flex items-start gap-3 mb-4">
               <div className="text-5xl">{challenge.banner}</div>
@@ -79,14 +73,13 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
               </div>
             </div>
             
-            {/* Total Pool Card */}
             <div className="relative">
               <div className="absolute inset-0 bg-gradient-to-r from-purple-500/20 to-blue-500/20 rounded-xl blur-lg opacity-50"></div>
               <div className="relative bg-purple-900/40 backdrop-blur-xl border border-purple-500/30 rounded-xl p-4">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-xs text-purple-300/70 font-semibold uppercase tracking-wider mb-1">Total Pool</p>
-                    <p className="text-2xl font-black text-white">${challenge.totalStaked}</p>
+                    <p className="text-2xl font-black text-white">${challenge.totalStaked.toFixed(2)}</p>
                   </div>
                   <div className="text-right">
                     <p className="text-xs text-purple-300/70 mb-1">Current Odds</p>
@@ -101,14 +94,12 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
             </div>
           </div>
 
-          {/* Choose Side Section */}
           <div className="mb-5">
             <label className="flex items-center gap-2 text-white font-black text-sm mb-3 uppercase tracking-wider">
               <div className="w-1 h-5 bg-gradient-to-b from-purple-500 to-pink-500 rounded-full"></div>
               Choose Your Side
             </label>
             <div className="grid grid-cols-2 gap-3">
-              {/* YES Button - GREEN */}
               <button
                 onClick={() => setSelectedSide('yes')}
                 className={`relative py-6 rounded-xl font-black text-center transition-all transform hover:scale-[1.02] active:scale-95 ${
@@ -132,7 +123,6 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
                 </div>
               </button>
 
-              {/* NO Button - RED */}
               <button
                 onClick={() => setSelectedSide('no')}
                 className={`relative py-6 rounded-xl font-black text-center transition-all transform hover:scale-[1.02] active:scale-95 ${
@@ -158,14 +148,12 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
             </div>
           </div>
 
-          {/* Stake Amount Section */}
           <div className="mb-5">
             <label className="flex items-center gap-2 text-white font-black text-sm mb-3 uppercase tracking-wider">
               <div className="w-1 h-5 bg-gradient-to-b from-blue-500 to-purple-500 rounded-full"></div>
               Stake Amount
             </label>
             
-            {/* Amount Input */}
             <div className="relative mb-3">
               <div className="absolute inset-0 bg-gradient-to-r from-purple-500 to-blue-500 rounded-xl blur opacity-0 focus-within:opacity-30 transition-opacity"></div>
               <input
@@ -180,7 +168,6 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
               <div className="absolute left-5 top-1/2 -translate-y-1/2 text-purple-400 font-black text-3xl pointer-events-none">$</div>
             </div>
             
-            {/* Quick Amount Buttons */}
             <div className="grid grid-cols-4 gap-2">
               {[10, 25, 50, 100].map((amount) => (
                 <button
@@ -203,7 +190,6 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
             </div>
           </div>
 
-          {/* Potential Return Card */}
           {stakeAmount && selectedSide && (
             <div className="relative animate-slideUp mb-4">
               <div className="absolute inset-0 bg-gradient-to-r from-green-500 to-emerald-500 rounded-xl blur-lg opacity-40 animate-pulse"></div>
@@ -234,7 +220,6 @@ export function BetModal({ challenge, onClose, onPlaceBet }: BetModalProps) {
           )}
         </div>
 
-        {/* Fixed Action Button at Bottom */}
         <div className="flex-shrink-0 border-t border-purple-500/30 bg-gradient-to-t from-black/80 to-transparent p-5">
           <button
             onClick={handleSubmit}

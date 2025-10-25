@@ -77,7 +77,7 @@ interface Pagination {
 }
 
 // ============================================
-// ABI DEFINITIONS (abbreviated for space)
+// ABI DEFINITIONS
 // ============================================
 
 const USDC_ABI = [
@@ -90,6 +90,29 @@ const CONTRACT_ABI = [
   { name: 'stake', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: '_id', type: 'uint256' }, { name: '_isFor', type: 'bool' }, { name: '_amount', type: 'uint256' }], outputs: [] },
   { name: 'vote', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: '_id', type: 'uint256' }, { name: '_voteFor', type: 'bool' }], outputs: [] },
   { name: 'canVote', type: 'function', stateMutability: 'view', inputs: [{ name: '_id', type: 'uint256' }, { name: '_user', type: 'address' }], outputs: [{ name: '', type: 'bool' }] },
+  { 
+    name: 'getChallenge', 
+    type: 'function', 
+    stateMutability: 'view', 
+    inputs: [{ name: '_id', type: 'uint256' }], 
+    outputs: [{
+      name: '', 
+      type: 'tuple',
+      components: [
+        { name: 'description', type: 'string' },
+        { name: 'creator', type: 'address' },
+        { name: 'creatorWager', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+        { name: 'votingDeadline', type: 'uint256' },
+        { name: 'isActive', type: 'bool' },
+        { name: 'isFinalized', type: 'bool' },
+        { name: 'totalFor', type: 'uint256' },
+        { name: 'totalAgainst', type: 'uint256' },
+        { name: 'finalOutcome', type: 'bool' },
+        { name: 'outcomeSet', type: 'bool' }
+      ]
+    }]
+  },
 ] as const;
 
 // ============================================
@@ -113,7 +136,7 @@ export function MarketTab() {
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterType>('all'); // Changed from 'active' to 'all'
+  const [filter, setFilter] = useState<FilterType>('all');
   const [category, setCategory] = useState<CategoryType>('all');
   const [page, setPage] = useState(1);
   const [selectedChallenge, setSelectedChallenge] = useState<Challenge | null>(null);
@@ -136,16 +159,58 @@ export function MarketTab() {
   };
 
   // ============================================
-  // HELPER FUNCTION: Format Challenge Data
+  // FETCH ON-CHAIN DATA
   // ============================================
-  const formatChallenge = (c: any): Challenge => {
-    let yesPercentage = 50;
-    if (c.yesPercentage !== undefined && c.yesPercentage !== null) {
-      yesPercentage = c.yesPercentage;
-    } else if (c.totalVotes > 0 && c.yesVotes !== undefined) {
-      yesPercentage = Math.round((c.yesVotes / c.totalVotes) * 100);
+  const fetchOnChainData = async (challengeId: number) => {
+    if (!publicClient) return null;
+    
+    try {
+      // Fetch challenge details from contract
+      const challengeData = await publicClient.readContract({
+        address: CONTRACT_ADDRESS,
+        abi: CONTRACT_ABI,
+        functionName: 'getChallenge',
+        args: [BigInt(challengeId)],
+      }) as any;
+
+      const totalFor = Number(challengeData.totalFor) / 1e6; // Convert from USDC wei (6 decimals)
+      const totalAgainst = Number(challengeData.totalAgainst) / 1e6;
+      const totalStaked = totalFor + totalAgainst;
+      
+      const yesPercentage = totalStaked > 0 
+        ? Math.round((totalFor / totalStaked) * 100) 
+        : 50;
+
+      return {
+        totalStaked,
+        totalFor,
+        totalAgainst,
+        yesPercentage,
+        noPercentage: 100 - yesPercentage,
+        isActive: challengeData.isActive,
+        isFinalized: challengeData.isFinalized,
+        deadline: Number(challengeData.deadline),
+        votingDeadline: Number(challengeData.votingDeadline),
+      };
+    } catch (err) {
+      console.error('Error fetching on-chain data:', err);
+      return null;
     }
-    yesPercentage = Math.max(0, Math.min(100, yesPercentage));
+  };
+
+  // ============================================
+  // HELPER FUNCTION: Format Challenge Data with On-Chain Integration
+  // ============================================
+  const formatChallenge = async (c: any): Promise<Challenge> => {
+    // Fetch on-chain data if available
+    let onChainData = null;
+    if (publicClient && c.id) {
+      onChainData = await fetchOnChainData(typeof c.id === 'string' ? parseInt(c.id) : c.id);
+    }
+
+    // Use on-chain data if available, fallback to API data
+    const totalStaked = onChainData?.totalStaked ?? c.currentStake ?? c.totalStaked ?? 0;
+    const yesPercentage = onChainData?.yesPercentage ?? c.yesPercentage ?? 50;
 
     return {
       id: c.id || c.Id,
@@ -156,16 +221,16 @@ export function MarketTab() {
       winCondition: c.winCondition || 'No win condition specified',
       creator: c.farcasterUsername || c.creator || 'Unknown',
       farcasterUsername: c.farcasterUsername,
-      currentStake: c.currentStake || c.totalStaked || 0,
-      totalStaked: c.currentStake || c.totalStaked || 0,
+      currentStake: totalStaked,
+      totalStaked: totalStaked,
       yesVotes: c.yesVotes || 0,
       noVotes: c.noVotes || 0,
       totalVotes: c.totalVotes || 0,
-      yesPercentage: yesPercentage,
+      yesPercentage: Math.max(0, Math.min(100, yesPercentage)),
       noPercentage: 100 - yesPercentage,
       participants: c.totalVotes || c.participants || 0,
       status: c.status || 'pending',
-      isActive: c.isActive !== undefined ? c.isActive : false,
+      isActive: onChainData?.isActive ?? (c.isActive !== undefined ? c.isActive : false),
       timeRemaining: c.timeRemaining,
       banner: categoryIcons[c.category] || '🎯',
       startDateTime: c.startDateTime,
@@ -189,7 +254,6 @@ export function MarketTab() {
         limit: '20',
         sortBy: 'createdAt',
         sortOrder: 'desc',
-        // 🔥 KEY FIX: Use 'all' to show all challenges, not just currently active
         status: filter === 'all' ? 'all' : filter,
       });
 
@@ -221,14 +285,17 @@ export function MarketTab() {
           return;
         }
 
-        const formattedChallenges = data.data.map((c: any) => {
+        // Format challenges with on-chain data (async)
+        const formattedChallengesPromises = data.data.map(async (c: any) => {
           try {
-            return formatChallenge(c);
+            return await formatChallenge(c);
           } catch (err) {
             console.error('❌ Error formatting challenge:', c, err);
             return null;
           }
-        }).filter(Boolean);
+        });
+
+        const formattedChallenges = (await Promise.all(formattedChallengesPromises)).filter(Boolean);
 
         console.log('✅ Formatted challenges:', formattedChallenges.length, 'challenges');
         console.log('📝 First challenge:', formattedChallenges[0]);
@@ -265,7 +332,7 @@ export function MarketTab() {
   }, [page, filter, category]);
 
   // ============================================
-  // HANDLE BET/VOTE (abbreviated - same as before)
+  // HANDLE BET/VOTE
   // ============================================
   const handlePlaceBet = async (side: 'yes' | 'no', amount: string) => {
     if (!selectedChallenge || !walletAddress || !publicClient || !walletClient) {
@@ -373,7 +440,7 @@ export function MarketTab() {
           </button>
         </div>
 
-        {/* Filter Tabs - Now includes "All" prominently */}
+        {/* Filter Tabs */}
         <div className="flex gap-2 mb-3">
           {[
             { id: 'all', label: 'All', icon: '🌟' },
@@ -499,8 +566,8 @@ export function MarketTab() {
         )}
       </div>
 
-      {/* Bet Modal */}
-      {selectedChallenge && (
+      {/* Bet Modal - Only show for active/voting challenges */}
+      {selectedChallenge && selectedChallenge.status !== 'pending' && (
         <BetModal
           challenge={{
             id: typeof selectedChallenge.id === 'string' ? parseInt(selectedChallenge.id) : selectedChallenge.id,
@@ -547,9 +614,23 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
   };
 
   const statusBadge = getStatusBadge();
+  
+  // Disable click for pending/upcoming challenges
+  const isClickable = challenge.status !== 'pending';
+  const handleClick = () => {
+    if (isClickable) {
+      onClick();
+    }
+  };
 
   return (
-    <div onClick={onClick} className="relative bg-gradient-to-br from-[#1a0b2e]/80 to-[#0f0520]/80 backdrop-blur-md border-2 border-purple-500/30 rounded-xl p-4 cursor-pointer transition-all duration-300 hover:border-purple-500/60 hover:scale-[1.02] active:scale-[0.98]"
+    <div 
+      onClick={handleClick} 
+      className={`relative bg-gradient-to-br from-[#1a0b2e]/80 to-[#0f0520]/80 backdrop-blur-md border-2 border-purple-500/30 rounded-xl p-4 transition-all duration-300 ${
+        isClickable 
+          ? 'cursor-pointer hover:border-purple-500/60 hover:scale-[1.02] active:scale-[0.98]' 
+          : 'cursor-not-allowed opacity-70'
+      }`}
       style={{ boxShadow: '0 4px 20px rgba(124, 58, 237, 0.2)' }}>
       
       {/* Status Badge */}
@@ -582,7 +663,7 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div className="bg-black/40 border border-purple-500/30 rounded-lg p-2.5">
           <p className="text-xs text-purple-300/70 mb-0.5">Total Staked</p>
-          <p className="text-xl font-black text-white">${challenge.currentStake || 0}</p>
+          <p className="text-xl font-black text-white">${challenge.currentStake.toFixed(2)}</p>
         </div>
         <div className="bg-black/40 border border-purple-500/30 rounded-lg p-2.5">
           <p className="text-xs text-purple-300/70 mb-0.5">Time</p>
@@ -600,10 +681,24 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
       </div>
 
       {/* Action Button */}
-      <button onClick={(e) => { e.stopPropagation(); onClick(); }}
-        className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#9333EA] text-white font-black text-sm uppercase tracking-wider transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
-        style={{ boxShadow: '0 4px 15px rgba(124, 58, 237, 0.5)' }}>
-        {challenge.status === 'voting' ? '🗳️ Cast Vote' : challenge.status === 'active' ? '💰 Place Stake' : challenge.status === 'pending' ? '⏰ Coming Soon' : '📊 View Details'}
+      <button 
+        onClick={(e) => { 
+          e.stopPropagation(); 
+          if (isClickable) onClick(); 
+        }}
+        disabled={!isClickable}
+        className={`w-full py-2.5 rounded-lg font-black text-sm uppercase tracking-wider transition-all duration-300 ${
+          isClickable
+            ? 'bg-gradient-to-r from-[#7C3AED] to-[#9333EA] text-white hover:scale-[1.02] active:scale-[0.98]'
+            : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+        }`}
+        style={{ 
+          boxShadow: isClickable ? '0 4px 15px rgba(124, 58, 237, 0.5)' : 'none' 
+        }}>
+        {challenge.status === 'voting' ? '🗳️ Cast Vote' : 
+         challenge.status === 'active' ? '💰 Place Stake' : 
+         challenge.status === 'pending' ? '⏰ Coming Soon' : 
+         '📊 View Details'}
       </button>
     </div>
   );
