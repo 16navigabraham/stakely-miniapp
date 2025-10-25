@@ -30,7 +30,6 @@ interface Category {
 
 type CreateStep = 
   | 'idle'
-  | 'uploading_banner'
   | 'checking_permit'
   | 'signing_permit'
   | 'approving'
@@ -46,7 +45,6 @@ type CreateStep =
 
 const STEP_MESSAGES: Record<CreateStep, string> = {
   idle: '',
-  uploading_banner: '📸 Processing banner...',
   checking_permit: '🔍 Checking permit support...',
   signing_permit: '📝 Sign in your wallet...',
   approving: '⏳ Approving USDC (1/2)...',
@@ -173,19 +171,6 @@ function formatTimeForBackend(timestamp: number): string {
   return `${hours}:${minutes}:${seconds}`;
 }
 
-// Convert file to base64
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => {
-      const base64 = reader.result as string;
-      resolve(base64.split(',')[1]);
-    };
-    reader.onerror = reject;
-  });
-}
-
 // ============================================
 // MAIN COMPONENT
 // ============================================
@@ -223,9 +208,6 @@ export function CreateTab({
   // STATE
   // ============================================
   const [formStep, setFormStep] = useState(1);
-  const [bannerImage, setBannerImage] = useState<string | null>(null);
-  const [bannerFile, setBannerFile] = useState<File | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
   
   const [challengeTitle, setChallengeTitle] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -291,38 +273,6 @@ export function CreateTab({
       }
     }
   }, [startDate, startTime, endDate, endTime]);
-
-  // ============================================
-  // IMAGE HANDLERS
-  // ============================================
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (!file.type.match(/image\/(jpeg|jpg|png)/)) {
-        setError('Banner must be JPEG or PNG');
-        return;
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        setError('Banner must be less than 5MB');
-        return;
-      }
-      
-      setBannerFile(file);
-      const reader = new FileReader();
-      reader.onload = () => setBannerImage(reader.result as string);
-      reader.readAsDataURL(file);
-      setError(null);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      handleImageUpload({ target: { files: [file] } } as any);
-    }
-  };
 
   // ============================================
   // BLOCKCHAIN FUNCTIONS
@@ -507,14 +457,6 @@ export function CreateTab({
   const saveToBackend = async (onchainData: { hash: string; challengeId: number }) => {
     setStep('saving_to_api');
 
-    if (!bannerFile) {
-      throw new Error('Banner is required');
-    }
-
-    addDebugLog('Converting banner to base64...', 'info');
-    const bannerBase64 = await fileToBase64(bannerFile);
-    addDebugLog(`Banner size: ${bannerBase64.length} chars`, 'success');
-
     const startDateTimeUnix = parseDateTime(startDate, startTime);
     const endDateTimeUnix = parseDateTime(endDate, endTime);
     const votingDeadlineUnix = endDateTimeUnix + votingDurationHours * 3600;
@@ -523,12 +465,8 @@ export function CreateTab({
     addDebugLog(`End: ${formatDateForBackend(endDateTimeUnix)} ${formatTimeForBackend(endDateTimeUnix)}`, 'info');
 
     const payload = {
-      Id: `${walletAddress?.toLowerCase()}_challenge${onchainData.challengeId}`,
-      onchainChallengeId: onchainData.challengeId,
+      Id: onchainData.challengeId,
       farcasterUsername,
-      farcasterFid,
-      farcasterPfpUrl,
-      farcasterWalletAddress: walletAddress,
       title: challengeTitle,
       category: selectedCategory!,
       description: description || challengeTitle,
@@ -538,15 +476,7 @@ export function CreateTab({
       startTime: formatTimeForBackend(startDateTimeUnix),
       endDate: formatDateForBackend(endDateTimeUnix),
       endTime: formatTimeForBackend(endDateTimeUnix),
-      votingDeadline: new Date(votingDeadlineUnix * 1000).toISOString(),
-      votingDurationHours,
       stakeAmount,
-      banner: {
-        filename: bannerFile.name,
-        contentType: bannerFile.type,
-        data: bannerBase64,
-      },
-      txHash: onchainData.hash,
     };
 
     addDebugLog(`Sending to API: ${API_BASE_URL}/api/create_challenge`, 'info');
@@ -594,7 +524,6 @@ export function CreateTab({
     // Validation checks
     addDebugLog(`Wallet: ${walletAddress ? '✅' : '❌'}`, walletAddress ? 'success' : 'error');
     addDebugLog(`Neynar: ${neynarUser ? '✅' : '❌'}`, neynarUser ? 'success' : 'error');
-    addDebugLog(`Banner: ${bannerFile ? '✅' : '❌'}`, bannerFile ? 'success' : 'error');
     addDebugLog(`Title: ${challengeTitle || '❌'}`, challengeTitle ? 'success' : 'error');
     addDebugLog(`Category: ${selectedCategory || '❌'}`, selectedCategory ? 'success' : 'error');
     addDebugLog(`Win condition: ${winCondition ? '✅' : '❌'}`, winCondition ? 'success' : 'error');
@@ -610,12 +539,6 @@ export function CreateTab({
     if (!neynarUser) {
       setError('Farcaster account not found');
       addDebugLog('Validation failed: No Neynar user', 'error');
-      return;
-    }
-
-    if (!bannerFile) {
-      setError('Please upload a banner image');
-      addDebugLog('Validation failed: No banner', 'error');
       return;
     }
 
@@ -693,8 +616,6 @@ export function CreateTab({
     setEndTime({ hours: '12', minutes: '00', seconds: '00' });
     setStakeAmount(50);
     setCustomStake('');
-    setBannerImage(null);
-    setBannerFile(null);
     setVotingDurationHours(24);
     setStep('idle');
     setTxHash(null);
@@ -792,7 +713,7 @@ export function CreateTab({
 
       {/* Content Area - Scrollable */}
       <div className="flex-1 overflow-y-auto px-4 pb-24">
-        {/* Step 1: Basic Info & Banner */}
+        {/* Step 1: Basic Info */}
         {formStep === 1 && (
           <div className="space-y-4 animate-slideUp">
             <h2 className="text-3xl font-black text-center uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
@@ -800,47 +721,6 @@ export function CreateTab({
                 Basic Info
               </span>
             </h2>
-
-            {/* Banner Upload */}
-            <div 
-              className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${
-                isDragging ? 'ring-4 ring-[#7C3AED] scale-[0.98]' : ''
-              }`}
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
-            >
-              {bannerImage ? (
-                <div className="relative aspect-[16/9] group">
-                  <img src={bannerImage} alt="Banner" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
-                    <label className="cursor-pointer bg-white/20 backdrop-blur-md border-2 border-white rounded-xl px-6 py-3 text-white font-bold">
-                      Change Banner
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/jpg,image/png"
-                        onChange={handleImageUpload}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-                </div>
-              ) : (
-                <label className="flex flex-col items-center justify-center aspect-[16/9] bg-black/40 border-2 border-dashed border-gray-600 hover:border-[#7C3AED] cursor-pointer transition-all duration-300">
-                  <div className="text-center p-4">
-                    <div className="text-5xl mb-3">🖼️</div>
-                    <p className="text-white font-bold text-lg mb-2">Upload Banner</p>
-                    <p className="text-gray-400 text-sm">Drag & drop or click (JPEG/PNG, max 5MB)</p>
-                  </div>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/jpg,image/png"
-                    onChange={handleImageUpload}
-                    className="hidden"
-                  />
-                </label>
-              )}
-            </div>
 
             {/* Challenge Title */}
             <div>
@@ -1042,19 +922,6 @@ export function CreateTab({
                 Set Your Stake
               </span>
             </h2>
-
-            {/* Info Banner - Updated */}
-            <div className="bg-blue-500/20 border border-blue-500/50 rounded-xl p-4">
-              <div className="flex items-start gap-3">
-                <span className="text-2xl">💎</span>
-                <div>
-                  <p className="text-white font-bold text-sm mb-1">2-Step Process</p>
-                  <p className="text-gray-300 text-xs">
-                    First approve USDC spending, then create your challenge. Both transactions are secure and verified.
-                  </p>
-                </div>
-              </div>
-            </div>
 
             {/* Preset Stakes */}
             <div className="grid grid-cols-3 gap-2">
