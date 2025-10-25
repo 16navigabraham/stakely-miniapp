@@ -1,13 +1,31 @@
 // components/ui/tabs/CreateTab.tsx
 "use client";
 import { useState, useEffect } from 'react';
+import { BrowserProvider } from 'ethers';
 import { TimePicker } from '../TimePicker';
+import { useCreateChallenge } from '~/hooks/useCreateChallenge';
+
+// ============================================
+// CONFIGURATION
+// ============================================
+
+const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x4b637CBe4B1A94CdcDE05c8BACC8C74813273CDf';
+const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://stakely-backend.onrender.com';
+
+// ============================================
+// TYPES
+// ============================================
 
 interface Category {
   id: string;
   label: string;
   icon: string;
 }
+
+// ============================================
+// CONSTANTS
+// ============================================
 
 const CATEGORIES: Category[] = [
   { id: 'sports', label: 'Sports', icon: '⚽' },
@@ -29,12 +47,29 @@ const SOCIAL_PLATFORMS = [
 
 const STAKE_PRESETS = [10, 25, 50, 100, 250, 500];
 
+// ============================================
+// MAIN COMPONENT
+// ============================================
+
 export function CreateTab() {
+  // ============================================
+  // WALLET STATE
+  // ============================================
+  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [signer, setSigner] = useState<any>(null);
+  const [userAddress, setUserAddress] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [farcasterUsername, setFarcasterUsername] = useState<string>('');
+  const [showUsernamePrompt, setShowUsernamePrompt] = useState(false);
+
+  // ============================================
+  // FORM STATE (Your existing state)
+  // ============================================
   const [step, setStep] = useState(1);
   const [bannerImage, setBannerImage] = useState<string | null>(null);
+  const [bannerFile, setBannerFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   
-  // Form data
   const [challengeTitle, setChallengeTitle] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [description, setDescription] = useState('');
@@ -46,11 +81,71 @@ export function CreateTab() {
   const [endTime, setEndTime] = useState({ hours: '12', minutes: '00', seconds: '00' });
   const [stakeAmount, setStakeAmount] = useState(50);
   const [customStake, setCustomStake] = useState('');
+  const [votingDurationHours, setVotingDurationHours] = useState(24);
   
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState('');
 
   const today = new Date().toISOString().split('T')[0];
+
+  // ============================================
+  // BLOCKCHAIN INTEGRATION
+  // ============================================
+  
+  const {
+    createChallenge,
+    loading: isCreating,
+    error: createError,
+    step: createStep,
+    onchainData,
+    apiResponse,
+    supportsPermit,
+    reset: resetCreate,
+  } = useCreateChallenge(provider, signer, CONTRACT_ADDRESS, USDC_ADDRESS, API_BASE_URL);
+
+  // ============================================
+  // WALLET CONNECTION
+  // ============================================
+
+  const connectWallet = async () => {
+    if (typeof window.ethereum === 'undefined') {
+      alert('Please install MetaMask or another Web3 wallet');
+      return;
+    }
+
+    try {
+      await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const provider = new BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const address = await signer.getAddress();
+
+      setProvider(provider);
+      setSigner(signer);
+      setUserAddress(address);
+      setIsConnected(true);
+      
+      // Prompt for Farcaster username
+      setShowUsernamePrompt(true);
+    } catch (error) {
+      console.error('Failed to connect wallet:', error);
+      alert('Failed to connect wallet');
+    }
+  };
+
+  // Auto-connect on mount
+  useEffect(() => {
+    if (typeof window.ethereum !== 'undefined') {
+      window.ethereum.request({ method: 'eth_accounts' })
+        .then((accounts: string[]) => {
+          if (accounts.length > 0) {
+            connectWallet();
+          }
+        });
+    }
+  }, []);
+
+  // ============================================
+  // HELPER FUNCTIONS
+  // ============================================
 
   // Calculate duration
   useEffect(() => {
@@ -78,6 +173,7 @@ export function CreateTab() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setBannerFile(file);
       const reader = new FileReader();
       reader.onload = () => setBannerImage(reader.result as string);
       reader.readAsDataURL(file);
@@ -89,10 +185,38 @@ export function CreateTab() {
     setIsDragging(false);
     const file = e.dataTransfer.files?.[0];
     if (file && file.type.startsWith('image/')) {
+      setBannerFile(file);
       const reader = new FileReader();
       reader.onload = () => setBannerImage(reader.result as string);
       reader.readAsDataURL(file);
     }
+  };
+
+  // Convert date to DD/MM/YYYY format
+  const formatDateForBackend = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  };
+
+  // Format time to HH:MM:SS
+  const formatTimeForBackend = (time: { hours: string; minutes: string; seconds: string }): string => {
+    return `${time.hours.padStart(2, '0')}:${time.minutes.padStart(2, '0')}:${time.seconds.padStart(2, '0')}`;
+  };
+
+  // Convert file to base64
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        const base64 = reader.result as string;
+        resolve(base64.split(',')[1]); // Remove data:image/jpeg;base64, prefix
+      };
+      reader.onerror = reject;
+    });
   };
 
   const canGoNext = () => {
@@ -115,26 +239,212 @@ export function CreateTab() {
     }
   };
 
-  const handleSubmit = () => {
-    setIsSubmitting(true);
-    console.log({ 
-      challengeTitle, 
-      selectedCategory, 
-      description, 
-      winCondition, 
-      selectedPlatform, 
-      startDate,
-      startTime,
-      endDate,
-      endTime,
-      stakeAmount, 
-      bannerImage 
-    });
-    setTimeout(() => {
-      setIsSubmitting(false);
-      // Reset or navigate
-    }, 2000);
+  // ============================================
+  // SUBMIT TO BLOCKCHAIN & BACKEND
+  // ============================================
+
+  const handleSubmit = async () => {
+    // Check wallet connection
+    if (!isConnected || !signer) {
+      alert('Please connect your wallet first');
+      return;
+    }
+
+    // Check Farcaster username
+    if (!farcasterUsername) {
+      setShowUsernamePrompt(true);
+      return;
+    }
+
+    // Check banner
+    if (!bannerFile) {
+      alert('Please upload a banner image');
+      return;
+    }
+
+    try {
+      // Convert banner to base64
+      const bannerBase64 = await fileToBase64(bannerFile);
+
+      // Prepare challenge data
+      const challengeData = {
+        farcasterUsername,
+        title: challengeTitle,
+        category: selectedCategory!,
+        description: description || challengeTitle,
+        winCondition,
+        startDate: formatDateForBackend(startDate),
+        startTime: formatTimeForBackend(startTime),
+        endDate: formatDateForBackend(endDate),
+        endTime: formatTimeForBackend(endTime),
+        stakeAmount,
+        votingDurationHours,
+        banner: {
+          filename: bannerFile.name,
+          contentType: bannerFile.type,
+          data: bannerBase64,
+        },
+      };
+
+      console.log('📤 Submitting challenge:', challengeData);
+
+      // Call the hook to create challenge
+      await createChallenge(challengeData);
+
+      // If successful, onchainData and apiResponse will be set
+    } catch (error: any) {
+      console.error('❌ Submit error:', error);
+      alert(`Error: ${error.message || 'Failed to create challenge'}`);
+    }
   };
+
+  // ============================================
+  // SUCCESS HANDLER
+  // ============================================
+
+  useEffect(() => {
+    if (createStep === 'success' && onchainData) {
+      // Show success message
+      setTimeout(() => {
+        alert(`🎉 Challenge #${onchainData.challengeId} created successfully!\n\nTransaction: ${onchainData.txHash}`);
+        
+        // Reset form
+        resetForm();
+      }, 1000);
+    }
+  }, [createStep, onchainData]);
+
+  const resetForm = () => {
+    setStep(1);
+    setChallengeTitle('');
+    setSelectedCategory(null);
+    setDescription('');
+    setWinCondition('');
+    setSelectedPlatform(null);
+    setStartDate('');
+    setStartTime({ hours: '12', minutes: '00', seconds: '00' });
+    setEndDate('');
+    setEndTime({ hours: '12', minutes: '00', seconds: '00' });
+    setStakeAmount(50);
+    setCustomStake('');
+    setBannerImage(null);
+    setBannerFile(null);
+    setVotingDurationHours(24);
+    resetCreate();
+  };
+
+  // ============================================
+  // GET PROGRESS MESSAGE
+  // ============================================
+
+  const getProgressMessage = () => {
+    switch (createStep) {
+      case 'checking_permit':
+        return '🔍 Checking permit support...';
+      case 'signing_permit':
+        return '📝 Please sign the permit message in your wallet...';
+      case 'approving':
+        return '⏳ Approving USDC... (Transaction 1/2)';
+      case 'creating':
+        return '⏳ Creating challenge on blockchain...';
+      case 'waiting_confirmation':
+        return '⏳ Waiting for transaction confirmation...';
+      case 'saving_to_api':
+        return '💾 Saving challenge details to database...';
+      case 'success':
+        return '✅ Challenge created successfully!';
+      case 'error':
+        return `❌ ${createError || 'An error occurred'}`;
+      default:
+        return '';
+    }
+  };
+
+  // ============================================
+  // RENDER - USERNAME PROMPT
+  // ============================================
+
+  if (showUsernamePrompt && !farcasterUsername) {
+    return (
+      <div className="h-screen bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] flex items-center justify-center p-4">
+        <div className="bg-black/60 backdrop-blur-xl border-2 border-[#7C3AED] rounded-2xl p-8 max-w-md w-full">
+          <h2 className="text-2xl font-black text-white mb-4 text-center uppercase">
+            Enter Farcaster Username
+          </h2>
+          <p className="text-gray-400 text-sm mb-6 text-center">
+            Connected: {userAddress?.slice(0, 6)}...{userAddress?.slice(-4)}
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const input = e.target as any;
+              const username = input.username.value.trim();
+              if (username) {
+                setFarcasterUsername(username);
+                setShowUsernamePrompt(false);
+              }
+            }}
+            className="space-y-4"
+          >
+            <input
+              name="username"
+              type="text"
+              placeholder="abrahamnavig"
+              className="w-full bg-black/40 border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white outline-none"
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="w-full py-3 bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white rounded-xl font-bold"
+            >
+              Continue
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================
+  // RENDER - CONNECT WALLET
+  // ============================================
+
+  if (!isConnected) {
+    return (
+      <div className="h-screen bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] flex items-center justify-center p-4">
+        <div className="bg-black/60 backdrop-blur-xl border-2 border-[#7C3AED] rounded-2xl p-8 max-w-md w-full text-center">
+          <div className="text-6xl mb-4">🔗</div>
+          <h2 className="text-2xl font-black text-white mb-4 uppercase">
+            Connect Wallet
+          </h2>
+          <p className="text-gray-400 text-sm mb-6">
+            Connect your wallet to create challenges
+          </p>
+          <button
+            onClick={connectWallet}
+            className="w-full py-4 bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white rounded-xl font-bold text-lg hover:shadow-lg hover:shadow-purple-500/50 transition-all"
+          >
+            Connect Wallet
+          </button>
+          
+          <div className="mt-6 space-y-2 text-left text-sm text-gray-400">
+            <div className="flex items-center gap-2">
+              <span>✅</span>
+              <span>Single-transaction creation on Base</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span>✅</span>
+              <span>Secure smart contract integration</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================
+  // RENDER - MAIN FORM (Your existing UI)
+  // ============================================
 
   return (
     <div className="h-screen bg-gradient-to-br from-[#0a0118] via-[#1a0f3a] to-[#0a0118] overflow-hidden flex flex-col pb-20">
@@ -152,7 +462,8 @@ export function CreateTab() {
           {step > 1 ? (
             <button
               onClick={() => setStep(step - 1)}
-              className="p-2 rounded-lg bg-black/40 border border-gray-700 text-white active:scale-95 transition-transform"
+              disabled={isCreating}
+              className="p-2 rounded-lg bg-black/40 border border-gray-700 text-white active:scale-95 transition-transform disabled:opacity-50"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -170,9 +481,43 @@ export function CreateTab() {
             </div>
           </div>
           
-          <div className="w-9"></div>
+          <button
+            onClick={() => setShowUsernamePrompt(true)}
+            className="text-xs text-gray-400 hover:text-white"
+          >
+            @{farcasterUsername}
+          </button>
         </div>
       </div>
+
+      {/* Blockchain Status Banner */}
+      {isCreating && (
+        <div className="px-4 pb-2">
+          <div className="bg-[#7C3AED]/20 border border-[#7C3AED] rounded-xl p-3">
+            <div className="flex items-center gap-3">
+              <div className="w-5 h-5 border-2 border-[#7C3AED] border-t-transparent rounded-full animate-spin"></div>
+              <span className="text-white text-sm font-medium">
+                {getProgressMessage()}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error Banner */}
+      {createError && (
+        <div className="px-4 pb-2">
+          <div className="bg-red-500/20 border border-red-500 rounded-xl p-3">
+            <p className="text-white text-sm">❌ {createError}</p>
+            <button
+              onClick={resetCreate}
+              className="text-red-400 text-xs underline mt-1"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Content Area - Scrollable with extra padding at bottom */}
       <div className="flex-1 overflow-y-auto px-4 pb-24">
@@ -197,120 +542,133 @@ export function CreateTab() {
               {bannerImage ? (
                 <div className="relative aspect-[16/9] group">
                   <img src={bannerImage} alt="Banner" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <label className="cursor-pointer px-4 py-2 bg-white/20 backdrop-blur-md rounded-lg text-white font-bold text-sm">
-                      Change Image
-                      <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+                    <label className="cursor-pointer bg-white/20 backdrop-blur-md border-2 border-white rounded-xl px-6 py-3 text-white font-bold">
+                      Change Banner
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageUpload}
+                        className="hidden"
+                      />
                     </label>
                   </div>
                 </div>
               ) : (
-                <label className="block aspect-[16/9] cursor-pointer bg-black/40 backdrop-blur-md border-2 border-dashed border-gray-700 hover:border-[#7C3AED] transition-colors">
-                  <div className="h-full flex flex-col items-center justify-center text-center p-4">
-                    <div className="w-16 h-16 rounded-full bg-gradient-to-r from-[#7C3AED] to-[#a855f7] flex items-center justify-center mb-3">
-                      <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                    </div>
-                    <p className="text-white font-bold text-sm mb-1">Upload Banner</p>
-                    <p className="text-gray-400 text-xs">Drag & drop or click to browse</p>
+                <label className="flex flex-col items-center justify-center aspect-[16/9] bg-black/40 border-2 border-dashed border-gray-600 hover:border-[#7C3AED] cursor-pointer transition-all duration-300">
+                  <div className="text-center p-4">
+                    <div className="text-5xl mb-3">🖼️</div>
+                    <p className="text-white font-bold text-lg mb-2">Upload Banner</p>
+                    <p className="text-gray-400 text-sm">Drag & drop or click to browse</p>
                   </div>
-                  <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    className="hidden"
+                  />
                 </label>
               )}
             </div>
 
-            {/* Title */}
-            <input
-              type="text"
-              value={challengeTitle}
-              onChange={(e) => setChallengeTitle(e.target.value)}
-              placeholder="Challenge Title"
-              maxLength={80}
-              className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 font-bold text-lg transition-all duration-300 outline-none"
-            />
+            {/* Challenge Title */}
+            <div>
+              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
+                🏆 Challenge Title
+              </label>
+              <input
+                type="text"
+                value={challengeTitle}
+                onChange={(e) => setChallengeTitle(e.target.value)}
+                placeholder="Bitcoin reaches $100k"
+                maxLength={100}
+                className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 font-bold text-lg outline-none transition-all duration-300"
+              />
+            </div>
 
-            {/* Category Grid */}
-            <div className="grid grid-cols-3 gap-2">
-              {CATEGORIES.map((cat) => {
-                const isSelected = selectedCategory === cat.id;
-                return (
+            {/* Category Selection */}
+            <div>
+              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
+                📂 Category
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {CATEGORIES.map((cat) => (
                   <button
                     key={cat.id}
                     onClick={() => setSelectedCategory(cat.id)}
-                    className={`relative p-4 rounded-xl transition-all duration-300 ${
-                      isSelected 
-                        ? 'bg-gradient-to-br from-[#7C3AED] to-[#a855f7] scale-105 shadow-lg shadow-purple-500/50' 
-                        : 'bg-black/40 border-2 border-gray-700'
+                    className={`p-3 rounded-xl font-bold transition-all duration-300 ${
+                      selectedCategory === cat.id
+                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white shadow-lg shadow-purple-500/50'
+                        : 'bg-black/40 border-2 border-gray-700 text-gray-300'
                     }`}
                   >
-                    <div className="flex flex-col items-center gap-1">
-                      <span className="text-2xl">{cat.icon}</span>
-                      <span className={`text-[10px] font-black uppercase ${isSelected ? 'text-white' : 'text-gray-400'}`}>
-                        {cat.label}
-                      </span>
-                    </div>
+                    <span className="text-2xl block mb-1">{cat.icon}</span>
+                    <span className="text-xs">{cat.label}</span>
                   </button>
-                );
-              })}
+                ))}
+              </div>
+            </div>
+
+            {/* Description (Optional) */}
+            <div>
+              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
+                📝 Description (Optional)
+              </label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Add more context about your challenge..."
+                rows={3}
+                maxLength={500}
+                className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 outline-none resize-none"
+              />
             </div>
           </div>
         )}
 
-        {/* Step 2: Details */}
+        {/* Step 2: Win Condition */}
         {step === 2 && (
           <div className="space-y-4 animate-slideUp">
             <h2 className="text-3xl font-black text-center uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
               <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">
-                Challenge Details
+                Win Condition
               </span>
             </h2>
 
-            {/* Description */}
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Brief description (optional)"
-              rows={3}
-              maxLength={200}
-              className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 font-medium transition-all duration-300 outline-none resize-none"
-            />
+            <div className="bg-black/40 border-2 border-[#7C3AED]/50 rounded-2xl p-6">
+              <p className="text-gray-300 text-sm mb-4">
+                Define what needs to happen for this challenge to be successful. Be specific and measurable.
+              </p>
+              <textarea
+                value={winCondition}
+                onChange={(e) => setWinCondition(e.target.value)}
+                placeholder="E.g., Bitcoin price reaches or exceeds $100,000 on any major exchange by the end date"
+                rows={4}
+                maxLength={500}
+                className="w-full bg-black/40 border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 outline-none resize-none"
+              />
+            </div>
 
-            {/* Win Condition */}
-            <textarea
-              value={winCondition}
-              onChange={(e) => setWinCondition(e.target.value)}
-              placeholder="Win Condition - Be specific about what needs to happen"
-              rows={4}
-              maxLength={300}
-              className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white placeholder-gray-500 font-medium transition-all duration-300 outline-none resize-none"
-            />
-
-            {/* Social Platform */}
+            {/* Social Platform (Optional) */}
             <div>
-              <p className="text-white font-bold text-sm mb-2 uppercase tracking-wider">Social Platform (Optional)</p>
+              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
+                📱 Social Platform (Optional)
+              </label>
               <div className="grid grid-cols-3 gap-2">
-                {SOCIAL_PLATFORMS.map((platform) => {
-                  const isSelected = selectedPlatform === platform.id;
-                  return (
-                    <button
-                      key={platform.id}
-                      onClick={() => setSelectedPlatform(isSelected ? null : platform.id)}
-                      className={`p-3 rounded-lg transition-all duration-300 ${
-                        isSelected 
-                          ? 'bg-gradient-to-br from-[#7C3AED] to-[#a855f7] scale-105' 
-                          : 'bg-black/30 border border-gray-700'
-                      }`}
-                    >
-                      <div className="flex flex-col items-center gap-1">
-                        <span className="text-xl">{platform.icon}</span>
-                        <span className={`text-[9px] font-bold uppercase ${isSelected ? 'text-white' : 'text-gray-400'}`}>
-                          {platform.label}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
+                {SOCIAL_PLATFORMS.map((platform) => (
+                  <button
+                    key={platform.id}
+                    onClick={() => setSelectedPlatform(platform.id === selectedPlatform ? null : platform.id)}
+                    className={`p-3 rounded-xl font-bold transition-all duration-300 ${
+                      selectedPlatform === platform.id
+                        ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white'
+                        : 'bg-black/40 border-2 border-gray-700 text-gray-300'
+                    }`}
+                  >
+                    <span className="text-xl block mb-1">{platform.icon}</span>
+                    <span className="text-xs">{platform.label}</span>
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -325,7 +683,7 @@ export function CreateTab() {
               </span>
             </h2>
 
-            {/* Start Date - FIXED WIDTH */}
+            {/* Start Date */}
             <div>
               <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
                 📅 Start Date
@@ -337,26 +695,9 @@ export function CreateTab() {
                   onChange={(e) => setStartDate(e.target.value)}
                   min={today}
                   className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-sm transition-all duration-300 outline-none cursor-pointer"
-                  style={{
-                    colorScheme: 'dark',
-                  }}
+                  style={{ colorScheme: 'dark' }}
                 />
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
-                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                </div>
               </div>
-              {startDate && (
-                <p className="text-gray-400 text-xs mt-1 px-1">
-                  {new Date(startDate + 'T00:00:00').toLocaleDateString('en-US', { 
-                    weekday: 'long',
-                    year: 'numeric', 
-                    month: 'long', 
-                    day: 'numeric' 
-                  })}
-                </p>
-              )}
             </div>
 
             {/* Start Time Picker */}
@@ -367,7 +708,7 @@ export function CreateTab() {
               onChange={setStartTime}
             />
 
-            {/* End Date - FIXED WIDTH */}
+            {/* End Date */}
             <div>
               <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
                 📅 End Date
@@ -379,26 +720,9 @@ export function CreateTab() {
                   onChange={(e) => setEndDate(e.target.value)}
                   min={startDate || today}
                   className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-sm transition-all duration-300 outline-none cursor-pointer"
-                  style={{
-                    colorScheme: 'dark',
-                  }}
+                  style={{ colorScheme: 'dark' }}
                 />
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
-                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                </div>
               </div>
-              {endDate && (
-                <p className="text-gray-400 text-xs mt-1 px-1">
-                  {new Date(endDate + 'T00:00:00').toLocaleDateString('en-US', { 
-                    weekday: 'long',
-                    year: 'numeric', 
-                    month: 'long', 
-                    day: 'numeric' 
-                  })}
-                </p>
-              )}
             </div>
 
             {/* End Time Picker */}
@@ -408,6 +732,24 @@ export function CreateTab() {
               value={endTime}
               onChange={setEndTime}
             />
+
+            {/* Voting Duration */}
+            <div>
+              <label className="block text-white font-bold text-sm mb-2 uppercase tracking-wider">
+                🗳️ Voting Duration (hours)
+              </label>
+              <input
+                type="number"
+                value={votingDurationHours}
+                onChange={(e) => setVotingDurationHours(Number(e.target.value))}
+                min="1"
+                max="168"
+                className="w-full bg-black/40 backdrop-blur-md border-2 border-gray-700 focus:border-[#7C3AED] rounded-xl px-4 py-3 text-white font-bold text-sm outline-none"
+              />
+              <p className="text-gray-400 text-xs mt-1">
+                Community voting period after challenge ends (1-168 hours)
+              </p>
+            </div>
 
             {/* Duration Display */}
             {timeRemaining && (
@@ -429,6 +771,21 @@ export function CreateTab() {
                 Set Your Stake
               </span>
             </h2>
+
+            {/* Permit Support Info */}
+            {supportsPermit !== null && (
+              <div className={`p-3 rounded-xl border-2 ${
+                supportsPermit 
+                  ? 'bg-green-500/20 border-green-500' 
+                  : 'bg-yellow-500/20 border-yellow-500'
+              }`}>
+                <p className="text-white text-xs">
+                  {supportsPermit 
+                    ? '✅ Single-transaction creation enabled!'
+                    : '⚠️ Two-transaction flow (approve + create)'}
+                </p>
+              </div>
+            )}
 
             {/* Preset Stakes */}
             <div className="grid grid-cols-3 gap-2">
@@ -469,7 +826,7 @@ export function CreateTab() {
             {/* Total Display */}
             <div className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] rounded-2xl p-6 text-center">
               <p className="text-white/80 font-bold text-sm mb-2 uppercase tracking-wider">Your Stake</p>
-              <p className="text-white font-black text-5xl">${stakeAmount.toFixed(2)}</p>
+              <p className="text-white font-black text-5xl">${stakeAmount.toFixed(2)} USDC</p>
             </div>
           </div>
         )}
@@ -479,17 +836,17 @@ export function CreateTab() {
       <div className="fixed bottom-20 left-0 right-0 px-4 pb-4 pt-2 bg-gradient-to-t from-[#0a0118] via-[#0a0118] to-transparent z-40">
         <button
           onClick={handleNext}
-          disabled={!canGoNext() || isSubmitting}
+          disabled={!canGoNext() || isCreating}
           className={`w-full py-4 rounded-xl font-black text-lg uppercase tracking-wider transition-all duration-300 ${
-            canGoNext() && !isSubmitting
+            canGoNext() && !isCreating
               ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white shadow-lg shadow-purple-500/50 active:scale-95'
               : 'bg-gray-800 text-gray-500 opacity-50 cursor-not-allowed'
           }`}
         >
-          {isSubmitting ? (
+          {isCreating ? (
             <span className="flex items-center justify-center gap-2">
               <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-              Creating...
+              {getProgressMessage()}
             </span>
           ) : step < 4 ? (
             <span className="flex items-center justify-center gap-2">
