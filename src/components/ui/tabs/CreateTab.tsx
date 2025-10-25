@@ -512,24 +512,11 @@ export function CreateTab({
       console.log('👤 Wallet:', walletAddress);
       console.log('🟣 Farcaster:', farcasterUsername);
 
-      // Check if permit is supported
-      const hasPermit = publicClient ? await supportsPermit(USDC_ADDRESS, publicClient) : false;
-      console.log('🔐 Permit:', hasPermit ? '✅ YES (1 tx)' : '❌ NO (2 txs)');
-
-      let result;
-      if (hasPermit) {
-        try {
-          result = await createWithPermit();
-          console.log('🎉 Created with permit (1 transaction)');
-        } catch (permitError: any) {
-          console.warn('⚠️ Permit failed, falling back to approval:', permitError.message);
-          result = await createWithApproval();
-          console.log('✅ Created with approval (2 transactions)');
-        }
-      } else {
-        result = await createWithApproval();
-        console.log('✅ Created with approval (2 transactions)');
-      }
+      // Always use approval flow for reliability
+      console.log('🔐 Using approval flow (2 transactions)');
+      
+      const result = await createWithApproval();
+      console.log('✅ Created with approval (2 transactions)');
 
       await saveToBackend(result);
 
@@ -936,14 +923,14 @@ export function CreateTab({
               </span>
             </h2>
 
-            {/* Permit Info Banner */}
+            {/* Info Banner - Updated */}
             <div className="bg-blue-500/20 border border-blue-500/50 rounded-xl p-4">
               <div className="flex items-start gap-3">
-                <span className="text-2xl">⚡</span>
+                <span className="text-2xl">💎</span>
                 <div>
-                  <p className="text-white font-bold text-sm mb-1">Gasless Approval Available!</p>
+                  <p className="text-white font-bold text-sm mb-1">2-Step Process</p>
                   <p className="text-gray-300 text-xs">
-                    Sign once to approve and create in a single transaction. No separate approval needed!
+                    First approve USDC spending, then create your challenge. Both transactions are secure and verified.
                   </p>
                 </div>
               </div>
