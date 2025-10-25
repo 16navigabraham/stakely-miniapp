@@ -22,7 +22,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://stakely-backend
 // ============================================
 
 type ChallengeStatus = 'active' | 'voting' | 'completed' | 'pending' | 'cancelled';
-type FilterType = 'all' | 'active' | 'voting';
+type FilterType = 'all' | 'active' | 'pending' | 'completed';
 type CategoryType = 'all' | 'sports' | 'crypto' | 'entertainment' | 'social network' | 'tech' | 'politics' | 'weather';
 
 interface Challenge {
@@ -77,71 +77,19 @@ interface Pagination {
 }
 
 // ============================================
-// ABI DEFINITIONS
+// ABI DEFINITIONS (abbreviated for space)
 // ============================================
 
 const USDC_ABI = [
-  {
-    name: 'balanceOf',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [{ name: 'account', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  {
-    name: 'allowance',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'owner', type: 'address' },
-      { name: 'spender', type: 'address' },
-    ],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  {
-    name: 'approve',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'spender', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ name: '', type: 'bool' }],
-  },
+  { name: 'balanceOf', type: 'function', stateMutability: 'view', inputs: [{ name: 'account', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
+  { name: 'allowance', type: 'function', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
+  { name: 'approve', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: 'spender', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ name: '', type: 'bool' }] },
 ] as const;
 
 const CONTRACT_ABI = [
-  {
-    name: 'stake',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: '_id', type: 'uint256' },
-      { name: '_isFor', type: 'bool' },
-      { name: '_amount', type: 'uint256' },
-    ],
-    outputs: [],
-  },
-  {
-    name: 'vote',
-    type: 'function',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: '_id', type: 'uint256' },
-      { name: '_voteFor', type: 'bool' },
-    ],
-    outputs: [],
-  },
-  {
-    name: 'canVote',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [
-      { name: '_id', type: 'uint256' },
-      { name: '_user', type: 'address' },
-    ],
-    outputs: [{ name: '', type: 'bool' }],
-  },
+  { name: 'stake', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: '_id', type: 'uint256' }, { name: '_isFor', type: 'bool' }, { name: '_amount', type: 'uint256' }], outputs: [] },
+  { name: 'vote', type: 'function', stateMutability: 'nonpayable', inputs: [{ name: '_id', type: 'uint256' }, { name: '_voteFor', type: 'bool' }], outputs: [] },
+  { name: 'canVote', type: 'function', stateMutability: 'view', inputs: [{ name: '_id', type: 'uint256' }, { name: '_user', type: 'address' }], outputs: [{ name: '', type: 'bool' }] },
 ] as const;
 
 // ============================================
@@ -149,9 +97,6 @@ const CONTRACT_ABI = [
 // ============================================
 
 export function MarketTab() {
-  // ============================================
-  // HOOKS
-  // ============================================
   const { context } = useMiniApp();
   const { user: neynarUser } = useNeynarUser(context || undefined);
   const { address: walletAddress } = useAccount();
@@ -168,7 +113,7 @@ export function MarketTab() {
   const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterType>('all');
+  const [filter, setFilter] = useState<FilterType>('all'); // Changed from 'active' to 'all'
   const [category, setCategory] = useState<CategoryType>('all');
   const [page, setPage] = useState(1);
   const [selectedChallenge, setSelectedChallenge] = useState<Challenge | null>(null);
@@ -194,19 +139,12 @@ export function MarketTab() {
   // HELPER FUNCTION: Format Challenge Data
   // ============================================
   const formatChallenge = (c: any): Challenge => {
-    // Safe percentage calculation
-    let yesPercentage = 50; // Default
+    let yesPercentage = 50;
     if (c.yesPercentage !== undefined && c.yesPercentage !== null) {
       yesPercentage = c.yesPercentage;
     } else if (c.totalVotes > 0 && c.yesVotes !== undefined) {
       yesPercentage = Math.round((c.yesVotes / c.totalVotes) * 100);
-    } else if (c.currentStake > 0) {
-      // If we have stake data but not vote percentages, use that
-      const yesStake = c.yesStake || 0;
-      yesPercentage = Math.round((yesStake / c.currentStake) * 100);
     }
-
-    // Ensure percentage is valid
     yesPercentage = Math.max(0, Math.min(100, yesPercentage));
 
     return {
@@ -226,8 +164,8 @@ export function MarketTab() {
       yesPercentage: yesPercentage,
       noPercentage: 100 - yesPercentage,
       participants: c.totalVotes || c.participants || 0,
-      status: c.status || 'active',
-      isActive: c.isActive !== undefined ? c.isActive : true,
+      status: c.status || 'pending',
+      isActive: c.isActive !== undefined ? c.isActive : false,
       timeRemaining: c.timeRemaining,
       banner: categoryIcons[c.category] || '🎯',
       startDateTime: c.startDateTime,
@@ -241,97 +179,85 @@ export function MarketTab() {
   // ============================================
   // FETCH DATA
   // ============================================
-  const fetchChallenges = async (pageNum: number = 1, statusFilter?: string) => {
+  const fetchChallenges = async (pageNum: number = 1) => {
     try {
       setLoading(true);
       setError(null);
 
-      // Build query parameters
       const params = new URLSearchParams({
         page: pageNum.toString(),
         limit: '20',
         sortBy: 'createdAt',
         sortOrder: 'desc',
+        // 🔥 KEY FIX: Use 'all' to show all challenges, not just currently active
+        status: filter === 'all' ? 'all' : filter,
       });
 
-      // Add username for personalization
       if (farcasterUsername) {
         params.append('farcasterUsername', farcasterUsername);
       }
 
-      // Add category filter
       if (category !== 'all') {
         params.append('category', category);
       }
 
-      // Add status filter
-      if (statusFilter) {
-        params.append('status', statusFilter);
-      } else if (filter === 'active') {
-        params.append('status', 'active');
-      } else if (filter === 'voting') {
-        params.append('status', 'voting');
-      }
-
-      console.log('Fetching challenges with params:', params.toString());
+      console.log('🔍 Fetching with params:', params.toString());
       
       const response = await fetch(`${API_BASE_URL}/api/live_market?${params}`);
       const data = await response.json();
 
-      console.log('API Response:', data);
+      console.log('📊 API Response:', {
+        success: data.success,
+        dataCount: data.data?.length,
+        marketStats: data.marketStats,
+        filters: data.filters
+      });
 
       if (data.success) {
-        // Check if we have data
         if (!data.data || !Array.isArray(data.data)) {
-          console.warn('No data array in response:', data);
+          console.warn('⚠️ No data array in response');
           setChallenges([]);
           setError('No challenges available');
           return;
         }
 
-        // Format challenges with safe data handling
         const formattedChallenges = data.data.map((c: any) => {
           try {
             return formatChallenge(c);
           } catch (err) {
-            console.error('Error formatting challenge:', c, err);
+            console.error('❌ Error formatting challenge:', c, err);
             return null;
           }
-        }).filter(Boolean); // Remove any null entries
+        }).filter(Boolean);
 
-        console.log('Formatted challenges:', formattedChallenges);
+        console.log('✅ Formatted challenges:', formattedChallenges.length, 'challenges');
+        console.log('📝 First challenge:', formattedChallenges[0]);
 
         setChallenges(formattedChallenges);
         
-        // Set pagination
         if (data.pagination) {
           setPagination(data.pagination);
-          console.log('Pagination:', data.pagination);
         }
 
-        // Set market stats
         if (data.marketStats) {
           setMarketStats(data.marketStats);
-          console.log('Market Stats:', data.marketStats);
         }
 
-        // If no challenges but we have stats showing there should be some
         if (formattedChallenges.length === 0 && data.marketStats?.totalChallenges > 0) {
-          setError('Challenges exist but could not be loaded. Try a different filter.');
+          setError(`Found ${data.marketStats.totalChallenges} total challenges, but none match current filters. Try "All" status.`);
         }
       } else {
-        console.error('API returned error:', data);
+        console.error('❌ API error:', data);
         setError(data.message || 'Failed to fetch challenges');
       }
     } catch (err: any) {
-      console.error('Fetch error:', err);
+      console.error('❌ Fetch error:', err);
       setError(err.message || 'Failed to fetch challenges');
     } finally {
       setLoading(false);
     }
   };
 
-  // Initial fetch and refresh every 30 seconds
   useEffect(() => {
     fetchChallenges(page);
     const interval = setInterval(() => fetchChallenges(page), 30000);
@@ -339,7 +265,7 @@ export function MarketTab() {
   }, [page, filter, category]);
 
   // ============================================
-  // HANDLE BET/VOTE
+  // HANDLE BET/VOTE (abbreviated - same as before)
   // ============================================
   const handlePlaceBet = async (side: 'yes' | 'no', amount: string) => {
     if (!selectedChallenge || !walletAddress || !publicClient || !walletClient) {
@@ -357,22 +283,16 @@ export function MarketTab() {
         ? parseInt(selectedChallenge.id) 
         : selectedChallenge.id;
 
-      // Determine if this is active staking or voting
       const isVoting = selectedChallenge.status === 'voting' || 
                        (selectedChallenge.timeRemaining?.expired && !selectedChallenge.isActive);
 
       if (!isVoting) {
-        // ACTIVE CHALLENGE - Use smart contract stake
         await handleStake(challengeId, isFor, stakeAmount);
       } else {
-        // VOTING CHALLENGE - Use smart contract vote + API
         await handleVote(challengeId, isFor, stakeAmount);
       }
 
-      // Submit vote/stake to API
       await submitVoteToAPI(challengeId, side, stakeAmount);
-
-      // Refresh data
       await fetchChallenges(page);
       setSelectedChallenge(null);
     } catch (err: any) {
@@ -383,125 +303,49 @@ export function MarketTab() {
     }
   };
 
-  // Stake on active challenge
   const handleStake = async (challengeId: number, isFor: boolean, amount: number) => {
     if (!walletAddress || !publicClient || !walletClient) return;
-
     const stakeAmountWei = formatUSDCAmount(amount);
-
-    // Check balance
-    const balance = await publicClient.readContract({
-      address: USDC_ADDRESS,
-      abi: USDC_ABI,
-      functionName: 'balanceOf',
-      args: [walletAddress],
-    });
-
-    if (balance < stakeAmountWei) {
-      throw new Error(`Insufficient USDC. Need ${amount} USDC`);
-    }
-
-    // Check allowance
-    const currentAllowance = await publicClient.readContract({
-      address: USDC_ADDRESS,
-      abi: USDC_ABI,
-      functionName: 'allowance',
-      args: [walletAddress, CONTRACT_ADDRESS],
-    });
-
-    // Approve if needed
+    const balance = await publicClient.readContract({ address: USDC_ADDRESS, abi: USDC_ABI, functionName: 'balanceOf', args: [walletAddress] });
+    if (balance < stakeAmountWei) throw new Error(`Insufficient USDC. Need ${amount} USDC`);
+    const currentAllowance = await publicClient.readContract({ address: USDC_ADDRESS, abi: USDC_ABI, functionName: 'allowance', args: [walletAddress, CONTRACT_ADDRESS] });
     if (currentAllowance < stakeAmountWei) {
-      const approveHash = await walletClient.writeContract({
-        address: USDC_ADDRESS,
-        abi: USDC_ABI,
-        functionName: 'approve',
-        args: [CONTRACT_ADDRESS, stakeAmountWei],
-      });
+      const approveHash = await walletClient.writeContract({ address: USDC_ADDRESS, abi: USDC_ABI, functionName: 'approve', args: [CONTRACT_ADDRESS, stakeAmountWei] });
       await publicClient.waitForTransactionReceipt({ hash: approveHash });
     }
-
-    // Stake
-    const hash = await walletClient.writeContract({
-      address: CONTRACT_ADDRESS,
-      abi: CONTRACT_ABI,
-      functionName: 'stake',
-      args: [BigInt(challengeId), isFor, stakeAmountWei],
-    });
-
+    const hash = await walletClient.writeContract({ address: CONTRACT_ADDRESS, abi: CONTRACT_ABI, functionName: 'stake', args: [BigInt(challengeId), isFor, stakeAmountWei] });
     await publicClient.waitForTransactionReceipt({ hash });
   };
 
-  // Vote on voting challenge
   const handleVote = async (challengeId: number, voteFor: boolean, stakeAmount: number) => {
     if (!walletAddress || !walletClient || !publicClient) return;
-
-    // Check if user can vote
-    const canVote = await publicClient.readContract({
-      address: CONTRACT_ADDRESS,
-      abi: CONTRACT_ABI,
-      functionName: 'canVote',
-      args: [BigInt(challengeId), walletAddress],
-    });
-
-    if (!canVote) {
-      throw new Error('You are not eligible to vote on this challenge');
-    }
-
-    // Cast vote
-    const hash = await walletClient.writeContract({
-      address: CONTRACT_ADDRESS,
-      abi: CONTRACT_ABI,
-      functionName: 'vote',
-      args: [BigInt(challengeId), voteFor],
-    });
-
+    const canVote = await publicClient.readContract({ address: CONTRACT_ADDRESS, abi: CONTRACT_ABI, functionName: 'canVote', args: [BigInt(challengeId), walletAddress] });
+    if (!canVote) throw new Error('You are not eligible to vote on this challenge');
+    const hash = await walletClient.writeContract({ address: CONTRACT_ADDRESS, abi: CONTRACT_ABI, functionName: 'vote', args: [BigInt(challengeId), voteFor] });
     await publicClient.waitForTransactionReceipt({ hash });
   };
 
-  // Submit vote to NEW API endpoint
   const submitVoteToAPI = async (challengeId: number, vote: 'yes' | 'no', stakeAmount: number) => {
     const response = await fetch(`${API_BASE_URL}/api/live_market`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        farcasterUsername,
-        challengeId,
-        vote,
-        stakeAmount,
-      }),
+      body: JSON.stringify({ farcasterUsername, challengeId, vote, stakeAmount }),
     });
-
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.message || 'Failed to record vote');
     }
-
     return response.json();
   };
 
-  // ============================================
-  // MANUAL REFRESH
-  // ============================================
   const handleRefresh = async () => {
     setRefreshing(true);
     await fetchChallenges(page);
     setTimeout(() => setRefreshing(false), 500);
   };
 
-  // ============================================
-  // PAGINATION
-  // ============================================
-  const handlePrevPage = () => {
-    if (pagination?.hasPrev) {
-      setPage(page - 1);
-    }
-  };
-
-  const handleNextPage = () => {
-    if (pagination?.hasNext) {
-      setPage(page + 1);
-    }
-  };
+  const handlePrevPage = () => { if (pagination?.hasPrev) setPage(page - 1); };
+  const handleNextPage = () => { if (pagination?.hasNext) setPage(page + 1); };
 
   // ============================================
   // RENDER
@@ -513,54 +357,40 @@ export function MarketTab() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-3xl font-black text-white uppercase tracking-tight" style={{ fontFamily: '"Bebas Neue", sans-serif' }}>
-              <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">
-                Live Market
-              </span>
+              <span className="bg-gradient-to-r from-[#7C3AED] to-[#a855f7] bg-clip-text text-transparent">Live Market</span>
             </h1>
             {marketStats && (
               <p className="text-xs text-gray-400 mt-1">
-                {marketStats.activeChallenges} active • ${marketStats.totalStaked.toLocaleString()} staked
+                {marketStats.totalChallenges} total • {marketStats.activeChallenges} active • ${marketStats.totalStaked.toLocaleString()} staked
               </p>
             )}
           </div>
           
-          {/* Refresh Button */}
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="p-2 rounded-lg bg-black/40 border border-gray-700 text-white active:scale-95 transition-transform disabled:opacity-50"
-          >
-            <svg 
-              className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} 
-              fill="none" 
-              stroke="currentColor" 
-              viewBox="0 0 24 24"
-            >
+          <button onClick={handleRefresh} disabled={refreshing} className="p-2 rounded-lg bg-black/40 border border-gray-700 text-white active:scale-95 transition-transform disabled:opacity-50">
+            <svg className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
           </button>
         </div>
 
-        {/* Filter Tabs */}
+        {/* Filter Tabs - Now includes "All" prominently */}
         <div className="flex gap-2 mb-3">
           {[
             { id: 'all', label: 'All', icon: '🌟' },
             { id: 'active', label: 'Active', icon: '🔥' },
-            { id: 'voting', label: 'Voting', icon: '🗳️' },
+            { id: 'pending', label: 'Upcoming', icon: '⏰' },
+            { id: 'completed', label: 'Ended', icon: '✅' },
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => {
-                setFilter(tab.id as FilterType);
-                setPage(1);
-              }}
-              className={`flex-1 py-2.5 px-4 rounded-xl font-bold text-sm transition-all duration-300 ${
+              onClick={() => { setFilter(tab.id as FilterType); setPage(1); }}
+              className={`flex-1 py-2.5 px-2 rounded-xl font-bold text-xs transition-all duration-300 ${
                 filter === tab.id
                   ? 'bg-gradient-to-r from-[#7C3AED] to-[#a855f7] text-white shadow-lg shadow-purple-500/50'
                   : 'bg-black/40 border border-gray-700 text-gray-400'
               }`}
             >
-              <span className="mr-2">{tab.icon}</span>
+              <span className="mr-1">{tab.icon}</span>
               {tab.label}
             </button>
           ))}
@@ -568,13 +398,8 @@ export function MarketTab() {
 
         {/* Category Filter */}
         <div className="relative">
-          <button
-            onClick={() => setShowCategories(!showCategories)}
-            className="w-full flex items-center justify-between bg-black/40 border border-gray-700 rounded-xl px-4 py-2.5 text-white text-sm font-bold"
-          >
-            <span>
-              {categoryIcons[category]} {category === 'all' ? 'All Categories' : category.charAt(0).toUpperCase() + category.slice(1)}
-            </span>
+          <button onClick={() => setShowCategories(!showCategories)} className="w-full flex items-center justify-between bg-black/40 border border-gray-700 rounded-xl px-4 py-2.5 text-white text-sm font-bold">
+            <span>{categoryIcons[category]} {category === 'all' ? 'All Categories' : category.charAt(0).toUpperCase() + category.slice(1)}</span>
             <svg className={`w-4 h-4 transition-transform ${showCategories ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
@@ -583,26 +408,13 @@ export function MarketTab() {
           {showCategories && (
             <div className="absolute top-full left-0 right-0 mt-2 bg-black/95 border border-gray-700 rounded-xl overflow-hidden z-50 backdrop-blur-lg">
               {(Object.keys(categoryIcons) as CategoryType[]).map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => {
-                    setCategory(cat);
-                    setShowCategories(false);
-                    setPage(1);
-                  }}
+                <button key={cat} onClick={() => { setCategory(cat); setShowCategories(false); setPage(1); }}
                   className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-bold transition-colors ${
-                    category === cat
-                      ? 'bg-[#7C3AED] text-white'
-                      : 'text-gray-400 hover:bg-gray-800'
-                  }`}
-                >
+                    category === cat ? 'bg-[#7C3AED] text-white' : 'text-gray-400 hover:bg-gray-800'
+                  }`}>
                   <span className="text-xl">{categoryIcons[cat]}</span>
                   <span>{cat === 'all' ? 'All Categories' : cat.charAt(0).toUpperCase() + cat.slice(1)}</span>
-                  {marketStats?.categoriesCount?.[cat] && (
-                    <span className="ml-auto text-xs opacity-70">
-                      {marketStats.categoriesCount[cat]}
-                    </span>
-                  )}
+                  {marketStats?.categoriesCount?.[cat] && <span className="ml-auto text-xs opacity-70">{marketStats.categoriesCount[cat]}</span>}
                 </button>
               ))}
             </div>
@@ -615,90 +427,67 @@ export function MarketTab() {
         <div className="mx-4 mb-3 animate-slideUp">
           <div className="bg-red-500/20 border border-red-500 rounded-xl p-3 flex items-center justify-between">
             <p className="text-white text-sm">❌ {error}</p>
-            <button onClick={() => setError(null)} className="text-white opacity-70 hover:opacity-100">
-              ✕
-            </button>
+            <button onClick={() => setError(null)} className="text-white opacity-70 hover:opacity-100">✕</button>
           </div>
         </div>
       )}
 
-      {/* Debug Info - Remove in production */}
+      {/* Debug Panel - Development Only */}
       {process.env.NODE_ENV === 'development' && (
         <div className="mx-4 mb-3 bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-3 text-xs text-yellow-200">
-          <p>Challenges loaded: {challenges.length}</p>
-          <p>Filter: {filter} | Category: {category} | Page: {page}</p>
-          {marketStats && <p>Total in DB: {marketStats.totalChallenges} | Active: {marketStats.activeChallenges}</p>}
+          <p><strong>Debug Info:</strong></p>
+          <p>• Challenges loaded: {challenges.length}</p>
+          <p>• Filter: {filter} | Category: {category} | Page: {page}</p>
+          {marketStats && <p>• Total in DB: {marketStats.totalChallenges} | Active: {marketStats.activeChallenges}</p>}
+          <p>• API Status filter: {filter === 'all' ? 'all' : filter}</p>
         </div>
       )}
 
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto px-4 pb-4">
         {loading ? (
-          // Loading State
           <div className="flex flex-col items-center justify-center h-full">
             <div className="w-16 h-16 border-4 border-[#7C3AED] border-t-transparent rounded-full animate-spin mb-4"></div>
             <p className="text-gray-400 font-medium">Loading challenges...</p>
           </div>
         ) : challenges.length === 0 ? (
-          // Empty State
           <div className="flex flex-col items-center justify-center h-full text-center px-4">
             <div className="text-6xl mb-4">📊</div>
             <h3 className="text-xl font-bold text-white mb-2">No Challenges Found</h3>
             <p className="text-gray-400 mb-4">
-              {filter === 'active' ? 'No active challenges at the moment' :
-               filter === 'voting' ? 'No challenges in voting period' :
+              {filter === 'active' ? 'No currently active challenges. Try "All" or "Upcoming"!' :
+               filter === 'pending' ? 'No upcoming challenges scheduled' :
+               filter === 'completed' ? 'No completed challenges yet' :
                category !== 'all' ? `No challenges in ${category} category` :
                'Be the first to create a challenge!'}
             </p>
-            {marketStats && marketStats.totalChallenges > 0 && (
-              <button
-                onClick={() => {
-                  setFilter('all');
-                  setCategory('all');
-                  setPage(1);
-                }}
-                className="px-4 py-2 bg-[#7C3AED] text-white rounded-lg font-bold text-sm hover:scale-105 transition-transform"
-              >
-                Show All Challenges
+            {marketStats && marketStats.totalChallenges > 0 && filter !== 'all' && (
+              <button onClick={() => { setFilter('all'); setCategory('all'); setPage(1); }}
+                className="px-4 py-2 bg-[#7C3AED] text-white rounded-lg font-bold text-sm hover:scale-105 transition-transform">
+                Show All {marketStats.totalChallenges} Challenges
               </button>
             )}
           </div>
         ) : (
-          // Challenges Grid
           <>
             <div className="space-y-3 mb-4">
               {challenges.map((challenge) => (
-                <ChallengeCard
-                  key={challenge.id}
-                  challenge={challenge}
-                  onClick={() => setSelectedChallenge(challenge)}
-                />
+                <ChallengeCard key={challenge.id} challenge={challenge} onClick={() => setSelectedChallenge(challenge)} />
               ))}
             </div>
 
-            {/* Pagination */}
             {pagination && pagination.totalPages > 1 && (
               <div className="flex items-center justify-between bg-black/40 border border-gray-700 rounded-xl p-4">
-                <button
-                  onClick={handlePrevPage}
-                  disabled={!pagination.hasPrev}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#7C3AED] text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105 active:scale-95"
-                >
+                <button onClick={handlePrevPage} disabled={!pagination.hasPrev}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#7C3AED] text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105 active:scale-95">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                   </svg>
                   Previous
                 </button>
-
-                <div className="text-white text-sm font-bold">
-                  Page {pagination.currentPage} of {pagination.totalPages}
-                </div>
-
-                <button
-                  onClick={handleNextPage}
-                  disabled={!pagination.hasNext}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#7C3AED] text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105 active:scale-95"
-                >
+                <div className="text-white text-sm font-bold">Page {pagination.currentPage} of {pagination.totalPages}</div>
+                <button onClick={handleNextPage} disabled={!pagination.hasNext}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#7C3AED] text-white font-bold text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105 active:scale-95">
                   Next
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -742,28 +531,31 @@ interface ChallengeCardProps {
 }
 
 function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
-  const isVoting = challenge.status === 'voting' || 
-                   (challenge.timeRemaining?.expired && !challenge.isActive);
-  const timeDisplay = challenge.timeRemaining;
+  const getStatusBadge = () => {
+    switch (challenge.status) {
+      case 'active':
+        return { color: 'from-green-500 to-green-600', shadow: 'shadow-green-500/50', icon: '🔥', label: 'ACTIVE' };
+      case 'pending':
+        return { color: 'from-yellow-500 to-yellow-600', shadow: 'shadow-yellow-500/50', icon: '⏰', label: 'UPCOMING' };
+      case 'voting':
+        return { color: 'from-blue-500 to-blue-600', shadow: 'shadow-blue-500/50', icon: '🗳️', label: 'VOTING' };
+      case 'completed':
+        return { color: 'from-gray-500 to-gray-600', shadow: 'shadow-gray-500/50', icon: '✅', label: 'ENDED' };
+      default:
+        return { color: 'from-purple-500 to-purple-600', shadow: 'shadow-purple-500/50', icon: '⏸️', label: challenge.status.toUpperCase() };
+    }
+  };
+
+  const statusBadge = getStatusBadge();
 
   return (
-    <div
-      onClick={onClick}
-      className="relative bg-gradient-to-br from-[#1a0b2e]/80 to-[#0f0520]/80 backdrop-blur-md border-2 border-purple-500/30 rounded-xl p-4 cursor-pointer transition-all duration-300 hover:border-purple-500/60 hover:scale-[1.02] active:scale-[0.98]"
-      style={{
-        boxShadow: '0 4px 20px rgba(124, 58, 237, 0.2)',
-      }}
-    >
+    <div onClick={onClick} className="relative bg-gradient-to-br from-[#1a0b2e]/80 to-[#0f0520]/80 backdrop-blur-md border-2 border-purple-500/30 rounded-xl p-4 cursor-pointer transition-all duration-300 hover:border-purple-500/60 hover:scale-[1.02] active:scale-[0.98]"
+      style={{ boxShadow: '0 4px 20px rgba(124, 58, 237, 0.2)' }}>
+      
       {/* Status Badge */}
       <div className="absolute -top-2 -right-2 z-10">
-        <div className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider ${
-          isVoting 
-            ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-lg shadow-blue-500/50' 
-            : challenge.isActive
-            ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/50'
-            : 'bg-gradient-to-r from-gray-500 to-gray-600 text-white shadow-lg shadow-gray-500/50'
-        }`}>
-          {isVoting ? '🗳️ VOTING' : challenge.isActive ? '🔥 ACTIVE' : '⏸️ PENDING'}
+        <div className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-gradient-to-r ${statusBadge.color} text-white shadow-lg ${statusBadge.shadow}`}>
+          {statusBadge.icon} {statusBadge.label}
         </div>
       </div>
 
@@ -771,13 +563,9 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
       <div className="flex items-start gap-3 mb-3">
         <div className="text-4xl flex-shrink-0">{challenge.banner}</div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-black text-white mb-1 leading-tight">
-            {challenge.title}
-          </h3>
+          <h3 className="text-lg font-black text-white mb-1 leading-tight">{challenge.title}</h3>
           <div className="flex items-center gap-2 text-xs flex-wrap">
-            <span className="px-2 py-0.5 bg-purple-500/20 border border-purple-500/40 rounded-full text-purple-300 font-bold">
-              {challenge.category}
-            </span>
+            <span className="px-2 py-0.5 bg-purple-500/20 border border-purple-500/40 rounded-full text-purple-300 font-bold">{challenge.category}</span>
             <span className="text-gray-500">•</span>
             <span className="text-gray-400 font-semibold">{challenge.totalVotes} votes</span>
             {challenge.creator && challenge.creator !== 'Unknown' && (
@@ -792,29 +580,19 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 mb-3">
-        {/* Total Pool */}
         <div className="bg-black/40 border border-purple-500/30 rounded-lg p-2.5">
           <p className="text-xs text-purple-300/70 mb-0.5">Total Staked</p>
           <p className="text-xl font-black text-white">${challenge.currentStake || 0}</p>
         </div>
-
-        {/* Time Remaining */}
         <div className="bg-black/40 border border-purple-500/30 rounded-lg p-2.5">
-          <p className="text-xs text-purple-300/70 mb-0.5">
-            {isVoting ? 'Voting' : 'Time Left'}
-          </p>
-          <p className="text-sm font-bold text-white truncate">
-            {timeDisplay?.humanReadable || 'N/A'}
-          </p>
+          <p className="text-xs text-purple-300/70 mb-0.5">Time</p>
+          <p className="text-sm font-bold text-white truncate">{challenge.timeRemaining?.humanReadable || 'N/A'}</p>
         </div>
       </div>
 
       {/* Odds Bar */}
       <div className="relative h-8 bg-black/40 rounded-lg overflow-hidden mb-2">
-        <div 
-          className="absolute inset-y-0 left-0 bg-gradient-to-r from-green-500 to-green-600 transition-all duration-500"
-          style={{ width: `${challenge.yesPercentage}%` }}
-        />
+        <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-green-500 to-green-600 transition-all duration-500" style={{ width: `${challenge.yesPercentage}%` }} />
         <div className="absolute inset-0 flex items-center justify-between px-3 text-xs font-black">
           <span className="text-white drop-shadow-lg">YES {challenge.yesPercentage}%</span>
           <span className="text-white drop-shadow-lg">NO {100 - challenge.yesPercentage}%</span>
@@ -822,17 +600,10 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
       </div>
 
       {/* Action Button */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onClick();
-        }}
+      <button onClick={(e) => { e.stopPropagation(); onClick(); }}
         className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#7C3AED] to-[#9333EA] text-white font-black text-sm uppercase tracking-wider transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
-        style={{
-          boxShadow: '0 4px 15px rgba(124, 58, 237, 0.5)',
-        }}
-      >
-        {isVoting ? '🗳️ Cast Vote' : '💰 Place Stake'}
+        style={{ boxShadow: '0 4px 15px rgba(124, 58, 237, 0.5)' }}>
+        {challenge.status === 'voting' ? '🗳️ Cast Vote' : challenge.status === 'active' ? '💰 Place Stake' : challenge.status === 'pending' ? '⏰ Coming Soon' : '📊 View Details'}
       </button>
     </div>
   );
