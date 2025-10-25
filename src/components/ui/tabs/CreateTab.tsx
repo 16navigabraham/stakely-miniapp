@@ -923,14 +923,14 @@ export function CreateTab({
               </span>
             </h2>
 
-            {/* Info Banner - Updated */}
+            {/* Permit Info Banner */}
             <div className="bg-blue-500/20 border border-blue-500/50 rounded-xl p-4">
               <div className="flex items-start gap-3">
-                <span className="text-2xl">💎</span>
+                <span className="text-2xl">⚡</span>
                 <div>
-                  <p className="text-white font-bold text-sm mb-1">2-Step Process</p>
+                  <p className="text-white font-bold text-sm mb-1">Gasless Approval Available!</p>
                   <p className="text-gray-300 text-xs">
-                    First approve USDC spending, then create your challenge. Both transactions are secure and verified.
+                    Sign once to approve and create in a single transaction. No separate approval needed!
                   </p>
                 </div>
               </div>
