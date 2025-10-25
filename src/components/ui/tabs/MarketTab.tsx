@@ -181,6 +181,24 @@ export function MarketTab() {
         ? Math.round((totalFor / totalStaked) * 100) 
         : 50;
 
+      const deadline = Number(challengeData.deadline) * 1000; // Convert to milliseconds
+      const votingDeadline = Number(challengeData.votingDeadline) * 1000;
+      const now = Date.now();
+
+      // Determine actual status based on timestamps
+      let actualStatus: ChallengeStatus;
+      if (challengeData.isFinalized) {
+        actualStatus = 'completed';
+      } else if (now < deadline && challengeData.isActive) {
+        actualStatus = 'active'; // Staking phase
+      } else if (now >= deadline && now < votingDeadline) {
+        actualStatus = 'voting'; // Voting phase
+      } else if (now >= votingDeadline) {
+        actualStatus = 'completed'; // Awaiting finalization
+      } else {
+        actualStatus = 'pending';
+      }
+
       return {
         totalStaked,
         totalFor,
@@ -189,8 +207,9 @@ export function MarketTab() {
         noPercentage: 100 - yesPercentage,
         isActive: challengeData.isActive,
         isFinalized: challengeData.isFinalized,
-        deadline: Number(challengeData.deadline),
-        votingDeadline: Number(challengeData.votingDeadline),
+        deadline,
+        votingDeadline,
+        actualStatus,
       };
     } catch (err) {
       console.error('Error fetching on-chain data:', err);
@@ -212,6 +231,29 @@ export function MarketTab() {
     const totalStaked = onChainData?.totalStaked ?? c.currentStake ?? c.totalStaked ?? 0;
     const yesPercentage = onChainData?.yesPercentage ?? c.yesPercentage ?? 50;
 
+    // Determine status - prioritize on-chain status calculation
+    let finalStatus: ChallengeStatus;
+    if (onChainData?.actualStatus) {
+      finalStatus = onChainData.actualStatus;
+    } else if (c.status) {
+      finalStatus = c.status;
+    } else {
+      // Fallback calculation from API timestamps
+      const now = Date.now();
+      const endTime = c.endDateTime ? new Date(c.endDateTime).getTime() : 0;
+      const voteEndTime = c.voteEndDateTime ? new Date(c.voteEndDateTime).getTime() : 0;
+      
+      if (now < endTime) {
+        finalStatus = 'active';
+      } else if (now >= endTime && now < voteEndTime) {
+        finalStatus = 'voting';
+      } else if (now >= voteEndTime) {
+        finalStatus = 'completed';
+      } else {
+        finalStatus = 'pending';
+      }
+    }
+
     return {
       id: c.id || c.Id,
       title: c.title || 'Untitled Challenge',
@@ -229,8 +271,8 @@ export function MarketTab() {
       yesPercentage: Math.max(0, Math.min(100, yesPercentage)),
       noPercentage: 100 - yesPercentage,
       participants: c.totalVotes || c.participants || 0,
-      status: c.status || 'pending',
-      isActive: onChainData?.isActive ?? (c.isActive !== undefined ? c.isActive : false),
+      status: finalStatus,
+      isActive: onChainData?.isActive ?? (c.isActive !== undefined ? c.isActive : finalStatus === 'active'),
       timeRemaining: c.timeRemaining,
       banner: categoryIcons[c.category] || '🎯',
       startDateTime: c.startDateTime,
@@ -295,7 +337,7 @@ export function MarketTab() {
           }
         });
 
-        const formattedChallenges = (await Promise.all(formattedChallengesPromises)).filter(Boolean);
+        const formattedChallenges = (await Promise.all(formattedChallengesPromises)).filter(Boolean) as Challenge[];
 
         console.log('✅ Formatted challenges:', formattedChallenges.length, 'challenges');
         console.log('📝 First challenge:', formattedChallenges[0]);
@@ -350,16 +392,35 @@ export function MarketTab() {
         ? parseInt(selectedChallenge.id) 
         : selectedChallenge.id;
 
-      const isVoting = selectedChallenge.status === 'voting' || 
-                       (selectedChallenge.timeRemaining?.expired && !selectedChallenge.isActive);
+      // Check challenge status to determine if staking or voting
+      const isVotingPhase = selectedChallenge.status === 'voting';
 
-      if (!isVoting) {
+      if (isVotingPhase) {
+        // VOTING PHASE: After deadline, before votingDeadline
+        // Check if user is eligible to vote
+        const canUserVote = await publicClient.readContract({
+          address: CONTRACT_ADDRESS,
+          abi: CONTRACT_ABI,
+          functionName: 'canVote',
+          args: [BigInt(challengeId), walletAddress],
+        });
+
+        if (!canUserVote) {
+          throw new Error('You are not eligible to vote. You either staked in this challenge or have not participated in any challenge before.');
+        }
+
+        await handleVote(challengeId, isFor);
+      } else if (selectedChallenge.status === 'active') {
+        // STAKING PHASE: Before deadline
         await handleStake(challengeId, isFor, stakeAmount);
       } else {
-        await handleVote(challengeId, isFor, stakeAmount);
+        throw new Error('This challenge is not accepting stakes or votes at this time.');
       }
 
+      // Record to API (for tracking purposes)
       await submitVoteToAPI(challengeId, side, stakeAmount);
+      
+      // Refresh challenges
       await fetchChallenges(page);
       setSelectedChallenge(null);
     } catch (err: any) {
@@ -384,11 +445,29 @@ export function MarketTab() {
     await publicClient.waitForTransactionReceipt({ hash });
   };
 
-  const handleVote = async (challengeId: number, voteFor: boolean, stakeAmount: number) => {
+  const handleVote = async (challengeId: number, voteFor: boolean) => {
     if (!walletAddress || !walletClient || !publicClient) return;
-    const canVote = await publicClient.readContract({ address: CONTRACT_ADDRESS, abi: CONTRACT_ABI, functionName: 'canVote', args: [BigInt(challengeId), walletAddress] });
-    if (!canVote) throw new Error('You are not eligible to vote on this challenge');
-    const hash = await walletClient.writeContract({ address: CONTRACT_ADDRESS, abi: CONTRACT_ABI, functionName: 'vote', args: [BigInt(challengeId), voteFor] });
+    
+    // Verify eligibility one more time
+    const canVote = await publicClient.readContract({ 
+      address: CONTRACT_ADDRESS, 
+      abi: CONTRACT_ABI, 
+      functionName: 'canVote', 
+      args: [BigInt(challengeId), walletAddress] 
+    });
+    
+    if (!canVote) {
+      throw new Error('You are not eligible to vote on this challenge. You must have staked in other challenges but not this one.');
+    }
+    
+    // Cast vote (no stake amount needed for voting)
+    const hash = await walletClient.writeContract({ 
+      address: CONTRACT_ADDRESS, 
+      abi: CONTRACT_ABI, 
+      functionName: 'vote', 
+      args: [BigInt(challengeId), voteFor] 
+    });
+    
     await publicClient.waitForTransactionReceipt({ hash });
   };
 
@@ -601,7 +680,7 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
   const getStatusBadge = () => {
     switch (challenge.status) {
       case 'active':
-        return { color: 'from-green-500 to-green-600', shadow: 'shadow-green-500/50', icon: '🔥', label: 'ACTIVE' };
+        return { color: 'from-green-500 to-green-600', shadow: 'shadow-green-500/50', icon: '🔥', label: 'STAKING' };
       case 'pending':
         return { color: 'from-yellow-500 to-yellow-600', shadow: 'shadow-yellow-500/50', icon: '⏰', label: 'UPCOMING' };
       case 'voting':
@@ -621,6 +700,18 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
     if (isClickable) {
       onClick();
     }
+  };
+
+  // Calculate time remaining based on status
+  const getTimeRemainingLabel = () => {
+    if (challenge.status === 'active') {
+      return 'Staking Ends';
+    } else if (challenge.status === 'voting') {
+      return 'Voting Ends';
+    } else if (challenge.status === 'completed') {
+      return 'Challenge Ended';
+    }
+    return 'Time';
   };
 
   return (
@@ -648,7 +739,7 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
           <div className="flex items-center gap-2 text-xs flex-wrap">
             <span className="px-2 py-0.5 bg-purple-500/20 border border-purple-500/40 rounded-full text-purple-300 font-bold">{challenge.category}</span>
             <span className="text-gray-500">•</span>
-            <span className="text-gray-400 font-semibold">{challenge.totalVotes} votes</span>
+            <span className="text-gray-400 font-semibold">{challenge.totalVotes} voters</span>
             {challenge.creator && challenge.creator !== 'Unknown' && (
               <>
                 <span className="text-gray-500">•</span>
@@ -666,17 +757,21 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
           <p className="text-xl font-black text-white">${challenge.currentStake.toFixed(2)}</p>
         </div>
         <div className="bg-black/40 border border-purple-500/30 rounded-lg p-2.5">
-          <p className="text-xs text-purple-300/70 mb-0.5">Time</p>
+          <p className="text-xs text-purple-300/70 mb-0.5">{getTimeRemainingLabel()}</p>
           <p className="text-sm font-bold text-white truncate">{challenge.timeRemaining?.humanReadable || 'N/A'}</p>
         </div>
       </div>
 
-      {/* Odds Bar */}
+      {/* Odds Bar - Shows stake distribution during staking, vote distribution during voting */}
       <div className="relative h-8 bg-black/40 rounded-lg overflow-hidden mb-2">
         <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-green-500 to-green-600 transition-all duration-500" style={{ width: `${challenge.yesPercentage}%` }} />
         <div className="absolute inset-0 flex items-center justify-between px-3 text-xs font-black">
-          <span className="text-white drop-shadow-lg">YES {challenge.yesPercentage}%</span>
-          <span className="text-white drop-shadow-lg">NO {100 - challenge.yesPercentage}%</span>
+          <span className="text-white drop-shadow-lg">
+            {challenge.status === 'voting' ? 'YES VOTES' : 'YES'} {challenge.yesPercentage}%
+          </span>
+          <span className="text-white drop-shadow-lg">
+            {challenge.status === 'voting' ? 'NO VOTES' : 'NO'} {100 - challenge.yesPercentage}%
+          </span>
         </div>
       </div>
 
@@ -695,10 +790,10 @@ function ChallengeCard({ challenge, onClick }: ChallengeCardProps) {
         style={{ 
           boxShadow: isClickable ? '0 4px 15px rgba(124, 58, 237, 0.5)' : 'none' 
         }}>
-        {challenge.status === 'voting' ? '🗳️ Cast Vote' : 
-         challenge.status === 'active' ? '💰 Place Stake' : 
+        {challenge.status === 'voting' ? '🗳️ Cast Your Vote' : 
+         challenge.status === 'active' ? '💰 Place Your Stake' : 
          challenge.status === 'pending' ? '⏰ Coming Soon' : 
-         '📊 View Details'}
+         '📊 View Results'}
       </button>
     </div>
   );
