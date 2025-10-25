@@ -7,8 +7,8 @@ import { signPermit, formatUSDCAmount, USDC_ADDRESSES } from "~/utils/permit-wag
 import { getNeynarUsername, getNeynarFid, getNeynarPfpUrl } from "~/lib/neynarUtils";
 
 // Contract addresses - from environment
-const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x4b637CBe4B1A94CdcDE05c8BACC8C74813273CDf';
-const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const CONTRACT_ADDRESS = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x4b637CBe4B1A94CdcDE05c8BACC8C74813273CDf') as Address;
+const USDC_ADDRESS = (process.env.NEXT_PUBLIC_USDC_ADDRESS || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') as Address;
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://stakely-backend.onrender.com';
 
 interface CreateTabProps {
@@ -412,7 +412,7 @@ export function CreateTab({ neynarUser, walletAddress, isWalletConnected }: Crea
       if (hasPermit) {
         try {
           result = await createWithPermit();
-        } catch (permitError: any) {
+        } catch (_permitError: any) {
           console.warn('⚠️ Permit failed, using approval');
           result = await createWithApproval();
         }
