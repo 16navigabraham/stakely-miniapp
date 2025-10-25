@@ -181,18 +181,22 @@ export function MarketTab() {
         ? Math.round((totalFor / totalStaked) * 100) 
         : 50;
 
-      const deadline = Number(challengeData.deadline) * 1000; // Convert to milliseconds
-      const votingDeadline = Number(challengeData.votingDeadline) * 1000;
+      // Contract timestamps are in seconds, convert to milliseconds
+      const stakingDeadline = Number(challengeData.deadline) * 1000; // When staking ends
+      const votingDeadline = Number(challengeData.votingDeadline) * 1000; // When voting ends
       const now = Date.now();
 
-      // Determine actual status based on timestamps
+      // Determine actual status based on contract logic:
+      // 1. STAKING: before deadline (stakingDeadline)
+      // 2. VOTING: between deadline and votingDeadline
+      // 3. COMPLETED: after votingDeadline or if finalized
       let actualStatus: ChallengeStatus;
       if (challengeData.isFinalized) {
         actualStatus = 'completed';
-      } else if (now < deadline && challengeData.isActive) {
+      } else if (now < stakingDeadline && challengeData.isActive) {
         actualStatus = 'active'; // Staking phase
-      } else if (now >= deadline && now < votingDeadline) {
-        actualStatus = 'voting'; // Voting phase
+      } else if (now >= stakingDeadline && now < votingDeadline) {
+        actualStatus = 'voting'; // Voting phase (only eligible voters can vote)
       } else if (now >= votingDeadline) {
         actualStatus = 'completed'; // Awaiting finalization
       } else {
@@ -207,8 +211,8 @@ export function MarketTab() {
         noPercentage: 100 - yesPercentage,
         isActive: challengeData.isActive,
         isFinalized: challengeData.isFinalized,
-        deadline,
-        votingDeadline,
+        stakingDeadline, // When staking phase ends
+        votingDeadline, // When voting phase ends
         actualStatus,
       };
     } catch (err) {
@@ -396,7 +400,8 @@ export function MarketTab() {
       const isVotingPhase = selectedChallenge.status === 'voting';
 
       if (isVotingPhase) {
-        // VOTING PHASE: After deadline, before votingDeadline
+        // VOTING PHASE: After staking deadline, before voting deadline
+        // Only users who have staked in OTHER challenges can vote
         // Check if user is eligible to vote
         const canUserVote = await publicClient.readContract({
           address: CONTRACT_ADDRESS,
@@ -406,12 +411,12 @@ export function MarketTab() {
         });
 
         if (!canUserVote) {
-          throw new Error('You are not eligible to vote. You either staked in this challenge or have not participated in any challenge before.');
+          throw new Error('Not eligible to vote. You must have staked in other challenges (but not this one) to vote.');
         }
 
         await handleVote(challengeId, isFor);
       } else if (selectedChallenge.status === 'active') {
-        // STAKING PHASE: Before deadline
+        // STAKING PHASE: Before staking deadline
         await handleStake(challengeId, isFor, stakeAmount);
       } else {
         throw new Error('This challenge is not accepting stakes or votes at this time.');
@@ -448,7 +453,7 @@ export function MarketTab() {
   const handleVote = async (challengeId: number, voteFor: boolean) => {
     if (!walletAddress || !walletClient || !publicClient) return;
     
-    // Verify eligibility one more time
+    // Verify eligibility one more time before voting
     const canVote = await publicClient.readContract({ 
       address: CONTRACT_ADDRESS, 
       abi: CONTRACT_ABI, 
@@ -457,10 +462,10 @@ export function MarketTab() {
     });
     
     if (!canVote) {
-      throw new Error('You are not eligible to vote on this challenge. You must have staked in other challenges but not this one.');
+      throw new Error('Not eligible to vote. You must have participated in other challenges (but not staked in this one) to vote.');
     }
     
-    // Cast vote (no stake amount needed for voting)
+    // Cast vote (no stake amount needed - voting is free, just your opinion)
     const hash = await walletClient.writeContract({ 
       address: CONTRACT_ADDRESS, 
       abi: CONTRACT_ABI, 
