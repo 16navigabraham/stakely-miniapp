@@ -180,12 +180,14 @@ interface CreateTabProps {
   neynarUser?: any;
   walletAddress?: Address;
   isWalletConnected?: boolean;
+  onSuccess?: () => void; // Callback to navigate to market tab
 }
 
 export function CreateTab({ 
   neynarUser: neynarUserProp, 
   walletAddress: walletAddressProp, 
-  isWalletConnected: isWalletConnectedProp 
+  isWalletConnected: isWalletConnectedProp,
+  onSuccess
 }: CreateTabProps = {}) {
   // ============================================
   // HOOKS
@@ -245,7 +247,6 @@ export function CreateTab({
     };
     const timestamp = new Date().toLocaleTimeString();
     const log = `${timestamp} ${emoji[type]} ${message}`;
-    console.log(log);
     setDebugLogs(prev => [...prev.slice(-50), log]); // Keep last 50 logs
   };
 
@@ -566,10 +567,15 @@ export function CreateTab({
       setStep('success');
       addDebugLog('=== CHALLENGE CREATED SUCCESSFULLY ===', 'success');
 
+      // Wait for user to see success message, then navigate
       setTimeout(() => {
-        resetForm();
-        setDebugLogs([]);
-      }, 5000);
+        if (onSuccess) {
+          onSuccess(); // Navigate to market tab
+        } else {
+          resetForm();
+          setDebugLogs([]);
+        }
+      }, 2500);
 
     } catch (err: any) {
       addDebugLog(`ERROR: ${err.message}`, 'error');
@@ -693,19 +699,27 @@ export function CreateTab({
       )}
 
       {step === 'success' && txHash && (
-        <div className="px-4 pb-2">
-          <div className="bg-green-500/20 border border-green-500 rounded-xl p-3">
-            <p className="text-green-400 font-bold mb-1">✅ Challenge Created!</p>
-            <div className="text-sm text-white/80">
-              <p>Challenge ID: {challengeId}</p>
-              <a
-                href={`https://basescan.org/tx/${txHash}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[#7C3AED] hover:underline"
-              >
-                View on BaseScan →
-              </a>
+        <div className="px-4 pb-2 animate-slideUp">
+          <div className="bg-gradient-to-r from-green-500/20 to-emerald-500/20 border-2 border-green-500 rounded-xl p-4 shadow-lg shadow-green-500/30">
+            <div className="flex items-start gap-3">
+              <div className="text-4xl animate-bounce">🎉</div>
+              <div className="flex-1">
+                <p className="text-green-400 font-black text-lg mb-1">Challenge Created!</p>
+                <div className="text-sm text-white/90 space-y-1">
+                  <p>Challenge ID: <span className="font-bold text-white">#{challengeId}</span></p>
+                  <a
+                    href={`https://basescan.org/tx/${txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#7C3AED] hover:text-[#a855f7] hover:underline inline-flex items-center gap-1 font-medium"
+                  >
+                    View on BaseScan →
+                  </a>
+                </div>
+                <p className="text-gray-300 text-xs mt-2">
+                  🚀 Redirecting to market...
+                </p>
+              </div>
             </div>
           </div>
         </div>
